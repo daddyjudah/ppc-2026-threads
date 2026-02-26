@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <ranges>
 #include <stack>
 #include <utility>
 #include <vector>
@@ -31,8 +30,8 @@ bool MarinLMarkOfCompBinImSEQ::ValidationImpl() {
 
 bool MarinLMarkOfCompBinImSEQ::PreProcessingImpl() {
   image_ = GetInput();
-  rows_ = static_cast<int>(image_.size());
-  cols_ = static_cast<int>(image_[0].size());
+  rows_ = image_.size();
+  cols_ = image_[0].size();
   GetOutput().assign(rows_, std::vector<int>(cols_, 0));
   return true;
 }
@@ -52,7 +51,8 @@ void MarinLMarkOfCompBinImSEQ::DFS(int x, int y) {
       int nx = cx + dx;
       int ny = cy + dy;
 
-      if (nx >= 0 && nx < rows_ && ny >= 0 && ny < cols_ && image_[nx][ny] == 1) {
+      if (nx >= 0 && ny >= 0 && static_cast<std::size_t>(nx) < rows_ && static_cast<std::size_t>(ny) < cols_ &&
+          image_[nx][ny] == 1) {
         image_[nx][ny] = current_label_;
         st.emplace(nx, ny);
       }
@@ -63,8 +63,8 @@ void MarinLMarkOfCompBinImSEQ::DFS(int x, int y) {
 bool MarinLMarkOfCompBinImSEQ::RunImpl() {
   current_label_ = 2;
 
-  for (int i = 0; i < rows_; ++i) {
-    for (int j = 0; j < cols_; ++j) {
+  for (std::size_t i = 0; i < rows_; ++i) {
+    for (std::size_t j = 0; j < cols_; ++j) {
       if (image_[i][j] == 1) {
         DFS(i, j);
         current_label_++;
@@ -72,8 +72,8 @@ bool MarinLMarkOfCompBinImSEQ::RunImpl() {
     }
   }
 
-  for (int i = 0; i < rows_; ++i) {
-    for (int j = 0; j < cols_; ++j) {
+  for (std::size_t i = 0; i < rows_; ++i) {
+    for (std::size_t j = 0; j < cols_; ++j) {
       if (image_[i][j] > 0) {
         image_[i][j] -= 1;
       }

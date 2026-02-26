@@ -24,8 +24,8 @@ class MarinLMarkOfCompBinImSEQ : public BaseTask {
 
   std::vector<std::vector<int>> image_;
   int current_label_{};
-  int rows_{};
-  int cols_{};
+  std::size_t rows_{};
+  std::size_t cols_{};
 };
 
 }  // namespace marin_l_mark_of_comp_bin_im_seq
