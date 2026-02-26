@@ -1,9 +1,12 @@
 #include "marin_l_mark_of_comp_bin_im_seq/seq/include/ops_seq.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <ranges>
 #include <stack>
 #include <utility>
+#include <vector>
 
 #include "marin_l_mark_of_comp_bin_im_seq/common/include/common.hpp"
 
@@ -23,13 +26,7 @@ bool MarinLMarkOfCompBinImSEQ::ValidationImpl() {
 
   const std::size_t cols = input[0].size();
 
-  for (const auto &row : input) {
-    if (row.size() != cols) {
-      return false;
-    }
-  }
-
-  return true;
+  return std::ranges::all_of(input, [cols](const auto &row) { return row.size() == cols; });
 }
 
 bool MarinLMarkOfCompBinImSEQ::PreProcessingImpl() {
@@ -45,16 +42,15 @@ void MarinLMarkOfCompBinImSEQ::DFS(int x, int y) {
   image_[x][y] = current_label_;
   st.emplace(x, y);
 
-  constexpr std::array<int, 4> dx{1, -1, 0, 0};
-  constexpr std::array<int, 4> dy{0, 0, 1, -1};
+  constexpr std::array<std::pair<int, int>, 4> kDirections{{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}};
 
   while (!st.empty()) {
     auto [cx, cy] = st.top();
     st.pop();
 
-    for (int i = 0; i < 4; ++i) {
-      int nx = cx + dx[i];
-      int ny = cy + dy[i];
+    for (const auto &[dx, dy] : kDirections) {
+      int nx = cx + dx;
+      int ny = cy + dy;
 
       if (nx >= 0 && nx < rows_ && ny >= 0 && ny < cols_ && image_[nx][ny] == 1) {
         image_[nx][ny] = current_label_;
