@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
+
 #include <random>
+#include <vector>
 
 #include "marin_l_mark_of_comp_bin_im_seq/common/include/common.hpp"
 #include "marin_l_mark_of_comp_bin_im_seq/seq/include/ops_seq.hpp"
@@ -14,7 +16,7 @@ class MarinLMarkOfCompBinImPerfTestsThreads : public ppc::util::BaseRunPerfTests
 
     InType img(size, std::vector<int>(size));
 
-    std::mt19937 gen(42);
+    std::mt19937 gen(std::random_device{}());
     std::uniform_int_distribution<> dist(0, 1);
 
     for (int i = 0; i < size; ++i) {
@@ -26,7 +28,8 @@ class MarinLMarkOfCompBinImPerfTestsThreads : public ppc::util::BaseRunPerfTests
     return img;
   }
 
-  bool CheckTestOutputData(OutType &) override {
+  bool CheckTestOutputData(OutType &output_data) override {
+    (void)output_data;
     return true;
   }
 };

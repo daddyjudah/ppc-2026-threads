@@ -1,16 +1,7 @@
 #include <gtest/gtest.h>
-#include <stb/stb_image.h>
 
-#include <algorithm>
 #include <array>
-#include <cstddef>
-#include <cstdint>
-#include <numeric>
-#include <stdexcept>
-#include <string>
 #include <tuple>
-#include <utility>
-#include <vector>
 
 #include "marin_l_mark_of_comp_bin_im_seq/common/include/common.hpp"
 #include "marin_l_mark_of_comp_bin_im_seq/seq/include/ops_seq.hpp"
