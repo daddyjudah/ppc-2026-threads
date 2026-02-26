@@ -52,8 +52,8 @@ void MarinLMarkOfCompBinImSEQ::DFS(std::size_t x, std::size_t y) {
       int ny = static_cast<int>(cy) + dy;
 
       if (nx >= 0 && ny >= 0) {
-        std::size_t unx = static_cast<std::size_t>(nx);
-        std::size_t uny = static_cast<std::size_t>(ny);
+        auto unx = static_cast<std::size_t>(nx);
+        auto uny = static_cast<std::size_t>(ny);
 
         if (unx < rows_ && uny < cols_ && image_[unx][uny] == 1) {
           image_[unx][uny] = current_label_;
