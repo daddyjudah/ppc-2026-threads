@@ -1,5 +1,4 @@
 #include <gtest/gtest.h>
-
 #include <random>
 
 #include "marin_l_mark_of_comp_bin_im_seq/common/include/common.hpp"
