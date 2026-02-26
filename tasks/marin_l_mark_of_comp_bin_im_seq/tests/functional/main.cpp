@@ -26,7 +26,44 @@ TEST_P(MarinLMarkOfCompBinImFuncTestsThreads, ConnectedComponents) {
   ExecuteTest(GetParam());
 }
 
-const std::array<TestType, 5> kTests = {{
+TEST(MarinLMarkOfCompBinImValidation, EmptyInput) {
+  MarinLMarkOfCompBinImSEQ task(Image{});
+  ASSERT_FALSE(task.Validation());
+}
+
+TEST(MarinLMarkOfCompBinImValidation, EmptyRow) {
+  Image input = {{}};
+  MarinLMarkOfCompBinImSEQ task(input);
+  ASSERT_FALSE(task.Validation());
+}
+
+TEST(MarinLMarkOfCompBinImSeqTest, ComponentAtImageBorder) {
+  Image input = {{1, 1, 1}, {1, 0, 0}, {1, 0, 0}};
+  Image expected = {{1, 1, 1}, {1, 0, 0}, {1, 0, 0}};
+
+  MarinLMarkOfCompBinImSEQ task(input);
+  ASSERT_TRUE(task.Validation());
+  ASSERT_TRUE(task.PreProcessing());
+  ASSERT_TRUE(task.Run());
+  ASSERT_TRUE(task.PostProcessing());
+
+  EXPECT_EQ(task.GetOutput(), expected);
+}
+
+TEST(MarinLMarkOfCompBinImSeqTest, AllDirections) {
+  Image input = {{0, 1, 0}, {1, 1, 1}, {0, 1, 0}};
+  Image expected = {{0, 1, 0}, {1, 1, 1}, {0, 1, 0}};
+
+  MarinLMarkOfCompBinImSEQ task(input);
+  ASSERT_TRUE(task.Validation());
+  ASSERT_TRUE(task.PreProcessing());
+  ASSERT_TRUE(task.Run());
+  ASSERT_TRUE(task.PostProcessing());
+
+  EXPECT_EQ(task.GetOutput(), expected);
+}
+
+const std::array<TestType, 9> kTests = {{
 
     std::make_tuple(Image{{1, 1, 0}, {1, 1, 0}, {0, 0, 0}}, Image{{1, 1, 0}, {1, 1, 0}, {0, 0, 0}}),
 
@@ -37,7 +74,15 @@ const std::array<TestType, 5> kTests = {{
     std::make_tuple(Image{{1, 1}, {1, 1}}, Image{{1, 1}, {1, 1}}),
 
     std::make_tuple(Image{{1, 0, 1, 1}, {1, 0, 0, 0}, {0, 0, 1, 0}, {1, 1, 0, 0}},
-                    Image{{1, 0, 2, 2}, {1, 0, 0, 0}, {0, 0, 3, 0}, {4, 4, 0, 0}})}};
+                    Image{{1, 0, 2, 2}, {1, 0, 0, 0}, {0, 0, 3, 0}, {4, 4, 0, 0}}),
+
+    std::make_tuple(Image{{1}}, Image{{1}}),
+
+    std::make_tuple(Image{{0}}, Image{{0}}),
+
+    std::make_tuple(Image{{1, 0, 0}, {0, 0, 0}, {0, 0, 0}}, Image{{1, 0, 0}, {0, 0, 0}, {0, 0, 0}}),
+
+    std::make_tuple(Image{{1}, {1}, {1}}, Image{{1}, {1}, {1}})}};
 
 namespace {
 

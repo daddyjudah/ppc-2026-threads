@@ -36,8 +36,8 @@ bool MarinLMarkOfCompBinImSEQ::PreProcessingImpl() {
   return true;
 }
 
-void MarinLMarkOfCompBinImSEQ::DFS(int x, int y) {
-  std::stack<std::pair<int, int>> st;
+void MarinLMarkOfCompBinImSEQ::DFS(std::size_t x, std::size_t y) {
+  std::stack<std::pair<std::size_t, std::size_t>> st;
   image_[x][y] = current_label_;
   st.emplace(x, y);
 
@@ -48,13 +48,17 @@ void MarinLMarkOfCompBinImSEQ::DFS(int x, int y) {
     st.pop();
 
     for (const auto &[dx, dy] : kDirections) {
-      int nx = cx + dx;
-      int ny = cy + dy;
+      int nx = static_cast<int>(cx) + dx;
+      int ny = static_cast<int>(cy) + dy;
 
-      if (nx >= 0 && ny >= 0 && static_cast<std::size_t>(nx) < rows_ && static_cast<std::size_t>(ny) < cols_ &&
-          image_[nx][ny] == 1) {
-        image_[nx][ny] = current_label_;
-        st.emplace(nx, ny);
+      if (nx >= 0 && ny >= 0) {
+        std::size_t unx = static_cast<std::size_t>(nx);
+        std::size_t uny = static_cast<std::size_t>(ny);
+
+        if (unx < rows_ && uny < cols_ && image_[unx][uny] == 1) {
+          image_[unx][uny] = current_label_;
+          st.emplace(unx, uny);
+        }
       }
     }
   }

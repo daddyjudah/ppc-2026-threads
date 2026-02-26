@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 
 #include "marin_l_mark_of_comp_bin_im_seq/common/include/common.hpp"
@@ -20,7 +21,7 @@ class MarinLMarkOfCompBinImSEQ : public BaseTask {
   bool RunImpl() override;
   bool PostProcessingImpl() override;
 
-  void DFS(int x, int y);
+  void DFS(std::size_t x, std::size_t y);
 
   std::vector<std::vector<int>> image_;
   int current_label_{};
