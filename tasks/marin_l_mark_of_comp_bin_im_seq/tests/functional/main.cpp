@@ -24,14 +24,34 @@ class MarinLMarkOfCompBinImFuncTestsThreads : public ppc::util::BaseRunFuncTests
 
 namespace {
 
+void CheckValidation(MarinLMarkOfCompBinImSEQ &task) {
+  EXPECT_TRUE(task.Validation());
+}
+
+void CheckPreProcessing(MarinLMarkOfCompBinImSEQ &task) {
+  ASSERT_TRUE(task.PreProcessing());
+}
+
+void CheckRun(MarinLMarkOfCompBinImSEQ &task) {
+  ASSERT_TRUE(task.Run());
+}
+
+void CheckPostProcessing(MarinLMarkOfCompBinImSEQ &task) {
+  ASSERT_TRUE(task.PostProcessing());
+}
+
+void CheckOutput(MarinLMarkOfCompBinImSEQ &task, const Image &expected) {
+  EXPECT_EQ(task.GetOutput(), expected);
+}
+
 void TestImage(const Image &input, const Image &expected) {
   MarinLMarkOfCompBinImSEQ task(input);
 
-  EXPECT_TRUE(task.Validation());
-  ASSERT_TRUE(task.PreProcessing());
-  ASSERT_TRUE(task.Run());
-  ASSERT_TRUE(task.PostProcessing());
-  EXPECT_EQ(task.GetOutput(), expected);
+  CheckValidation(task);
+  CheckPreProcessing(task);
+  CheckRun(task);
+  CheckPostProcessing(task);
+  CheckOutput(task, expected);
 }
 
 void TestValidation(const Image &input, bool expected_valid) {
