@@ -22,6 +22,21 @@ class MarinLMarkOfCompBinImFuncTestsThreads : public ppc::util::BaseRunFuncTests
   }
 };
 
+namespace {
+
+void TestFullTask(const Image &input, const Image &expected) {
+  MarinLMarkOfCompBinImSEQ task(input);
+
+  EXPECT_TRUE(task.Validation());
+  ASSERT_TRUE(task.PreProcessing());
+  ASSERT_TRUE(task.Run());
+  ASSERT_TRUE(task.PostProcessing());
+
+  EXPECT_EQ(task.GetOutput(), expected);
+}
+
+}  // namespace
+
 TEST_P(MarinLMarkOfCompBinImFuncTestsThreads, ConnectedComponents) {
   ExecuteTest(GetParam());
 }
@@ -37,29 +52,25 @@ TEST(MarinLMarkOfCompBinImValidation, EmptyRow) {
   ASSERT_FALSE(task.Validation());
 }
 
-static Image RunFullTask(const Image &input) {
-  MarinLMarkOfCompBinImSEQ task(input);
-
-  EXPECT_TRUE(task.Validation());
-  EXPECT_TRUE(task.PreProcessing());
-  EXPECT_TRUE(task.Run());
-  EXPECT_TRUE(task.PostProcessing());
-
-  return task.GetOutput();
-}
-
 TEST(MarinLMarkOfCompBinImSeqTest, ComponentAtImageBorder) {
   Image input = {{1, 1, 1}, {1, 0, 0}, {1, 0, 0}};
   Image expected = {{1, 1, 1}, {1, 0, 0}, {1, 0, 0}};
 
-  EXPECT_EQ(RunFullTask(input), expected);
+  TestFullTask(input, expected);
 }
 
 TEST(MarinLMarkOfCompBinImSeqTest, AllDirections) {
   Image input = {{0, 1, 0}, {1, 1, 1}, {0, 1, 0}};
   Image expected = {{0, 1, 0}, {1, 1, 1}, {0, 1, 0}};
 
-  EXPECT_EQ(RunFullTask(input), expected);
+  TestFullTask(input, expected);
+}
+
+TEST(MarinLMarkOfCompBinImSeqTest, ZeroPixel) {
+  Image input = {{0}};
+  Image expected = {{0}};
+
+  TestFullTask(input, expected);
 }
 
 const std::array<TestType, 9> kTests = {{
