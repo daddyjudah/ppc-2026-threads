@@ -6,6 +6,7 @@
 #include "marin_l_mark_of_comp_bin_im_seq/common/include/common.hpp"
 #include "marin_l_mark_of_comp_bin_im_seq/seq/include/ops_seq.hpp"
 #include "util/include/func_test_util.hpp"
+#include "util/include/util.hpp"
 
 namespace marin_l_mark_of_comp_bin_im_seq {
 
