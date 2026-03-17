@@ -152,7 +152,7 @@ void MarinLMarkComponentsOMP::FirstPass() {
   auto &parent = GetParentStorage();
   parent.assign(static_cast<std::size_t>(max_labels) + 1ULL, 0);
 
-#pragma omp parallel for
+#pragma omp parallel for default(none) shared(parent, max_labels)
   for (int i = 0; i <= max_labels; ++i) {
     parent[i] = i;
   }
@@ -165,7 +165,7 @@ void MarinLMarkComponentsOMP::FirstPass() {
     }
   }
 
-#pragma omp parallel for
+#pragma omp parallel for default(none) shared(parent, next_label)
   for (int label = 1; label < next_label; ++label) {
     parent[label] = FindRoot(parent, label);
   }
