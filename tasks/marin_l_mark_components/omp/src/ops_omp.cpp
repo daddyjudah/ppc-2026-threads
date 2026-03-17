@@ -13,8 +13,6 @@ namespace {
 
 constexpr std::uint64_t kMaxPixels = 100000000ULL;
 
-// Полностью копируем вспомогательные функции из SEQ-версии
-
 std::vector<int> &GetParentStorage() {
   thread_local std::vector<int> parent_storage;
   return parent_storage;
@@ -43,12 +41,7 @@ void UnionLabels(std::vector<int> &parent, int a, int b) {
   }
 }
 
-void ProcessPixel(const Image &binary,
-                  Labels &labels,
-                  std::vector<int> &parent,
-                  int row,
-                  int col,
-                  int &next_label) {
+void ProcessPixel(const Image &binary, Labels &labels, std::vector<int> &parent, int row, int col, int &next_label) {
   if (binary[row][col] == 0) {
     return;
   }
@@ -133,15 +126,13 @@ bool MarinLMarkComponentsOMP::PreProcessingImpl() {
     return false;
   }
 
-  const std::uint64_t pixels =
-      static_cast<std::uint64_t>(height) * static_cast<std::uint64_t>(width);
+  const std::uint64_t pixels = static_cast<std::uint64_t>(height) * static_cast<std::uint64_t>(width);
 
   if (pixels > kMaxPixels) {
     return false;
   }
 
-  labels_.assign(static_cast<std::size_t>(height),
-                 std::vector<int>(static_cast<std::size_t>(width), 0));
+  labels_.assign(static_cast<std::size_t>(height), std::vector<int>(static_cast<std::size_t>(width), 0));
 
   return true;
 }
@@ -161,7 +152,6 @@ void MarinLMarkComponentsOMP::FirstPass() {
   auto &parent = GetParentStorage();
   parent.assign(static_cast<std::size_t>(max_labels) + 1ULL, 0);
 
-  // Инициализацию parent можно распараллелить
 #pragma omp parallel for
   for (int i = 0; i <= max_labels; ++i) {
     parent[i] = i;
@@ -169,14 +159,12 @@ void MarinLMarkComponentsOMP::FirstPass() {
 
   int next_label = 1;
 
-  // Основной проход оставляем последовательным — логика полностью совпадает с SEQ
   for (int row = 0; row < height; ++row) {
     for (int col = 0; col < width; ++col) {
       ProcessPixel(binary_, labels_, parent, row, col, next_label);
     }
   }
 
-  // Финальное сжатие путей можно выполнить параллельно
 #pragma omp parallel for
   for (int label = 1; label < next_label; ++label) {
     parent[label] = FindRoot(parent, label);
@@ -203,7 +191,6 @@ void MarinLMarkComponentsOMP::SecondPass() {
   std::vector<int> root_to_compact(static_cast<std::size_t>(max_label + 1), 0);
   int next_id = 1;
 
-  // Для корректности делаем второй проход последовательно, как в SEQ
   for (int i = 0; i < height; ++i) {
     for (int j = 0; j < width; ++j) {
       int label = labels_[i][j];

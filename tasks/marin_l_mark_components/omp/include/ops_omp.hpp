@@ -3,7 +3,6 @@
 #include "marin_l_mark_components/common/include/common.hpp"
 #include "task/include/task.hpp"
 
-
 namespace marin_l_mark_components {
 
 class MarinLMarkComponentsOMP : public BaseTask {
