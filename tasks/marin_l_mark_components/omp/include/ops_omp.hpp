@@ -1,7 +1,5 @@
 #pragma once
 
-#include <omp.h>
-
 #include "marin_l_mark_components/common/include/common.hpp"
 #include "task/include/task.hpp"
 
