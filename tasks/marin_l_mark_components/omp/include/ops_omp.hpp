@@ -24,11 +24,6 @@ class MarinLMarkComponentsOMP : public BaseTask {
   void FirstPass();
   void SecondPass();
 
-  void ProcessRow(int row, int width, int &next_label, std::vector<int> &parent,
-                  std::vector<std::vector<int>> &local_labels);
-  void MergeLabels(int height, int width, std::vector<int> &parent);
-  void RelabelComponents(int height, int width, std::vector<int> &parent);
-
   Image binary_;
   Labels labels_;
 };

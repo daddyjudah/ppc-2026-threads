@@ -1,5 +1,7 @@
 #include "marin_l_mark_components/omp/include/ops_omp.hpp"
 
+#include <omp.h>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
