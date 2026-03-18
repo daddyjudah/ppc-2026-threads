@@ -164,6 +164,7 @@ void MarinLMarkComponentsOMP::FirstPass() {
   for (int i = 1; i <= num_threads; ++i) {
     thread_offsets[i] += thread_offsets[i - 1];
   }
+
 #pragma omp parallel
   {
     int thread_id = omp_get_thread_num();
@@ -194,7 +195,10 @@ void MarinLMarkComponentsOMP::FirstPass() {
         int bottom_label = labels_[boundary_row][col];
 
         if (top_label != 0 && bottom_label != 0 && top_label != bottom_label) {
-          UnionLabels(parent, top_label, bottom_label);
+#pragma omp critical
+          {
+            UnionLabels(parent, top_label, bottom_label);
+          }
         }
       }
     }
