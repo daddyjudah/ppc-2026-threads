@@ -1,5 +1,7 @@
 #pragma once
 
+#include <omp.h>
+
 #include "marin_l_mark_components/common/include/common.hpp"
 #include "task/include/task.hpp"
 
@@ -10,6 +12,7 @@ class MarinLMarkComponentsOMP : public BaseTask {
   static constexpr ppc::task::TypeOfTask GetStaticTypeOfTask() {
     return ppc::task::TypeOfTask::kOMP;
   }
+
   explicit MarinLMarkComponentsOMP(const InType &in);
 
  private:
@@ -22,6 +25,11 @@ class MarinLMarkComponentsOMP : public BaseTask {
 
   void FirstPass();
   void SecondPass();
+
+  void ProcessRow(int row, int width, int &next_label, std::vector<int> &parent,
+                  std::vector<std::vector<int>> &local_labels);
+  void MergeLabels(int height, int width, std::vector<int> &parent);
+  void RelabelComponents(int height, int width, std::vector<int> &parent);
 
   Image binary_;
   Labels labels_;
