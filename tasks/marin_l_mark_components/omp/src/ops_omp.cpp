@@ -11,11 +11,6 @@ namespace {
 
 constexpr std::uint64_t kMaxPixels = 100000000ULL;
 
-std::vector<int> &GetThreadLocalParent() {
-  thread_local std::vector<int> parent_storage;
-  return parent_storage;
-}
-
 int FindRoot(std::vector<int> &parent, int x) {
   while (parent[x] != x) {
     parent[x] = parent[parent[x]];
@@ -228,7 +223,6 @@ void MarinLMarkComponentsOMP::SecondPass() {
   }
 
   std::vector<int> unique_labels;
-  std::vector<int> label_to_compact;
 
   int max_label = 0;
   for (int row = 0; row < height; ++row) {
