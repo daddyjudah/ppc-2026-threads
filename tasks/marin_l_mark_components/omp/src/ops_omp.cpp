@@ -36,39 +36,6 @@ void UnionLabels(std::vector<int> &parent, int a, int b) {
   }
 }
 
-void ProcessPixel(const Image &binary, Labels &labels, std::vector<int> &parent, int row, int col, int &next_label) {
-  if (binary[row][col] == 0) {
-    return;
-  }
-
-  int left = (col > 0) ? labels[row][col - 1] : 0;
-  int top = (row > 0) ? labels[row - 1][col] : 0;
-
-  if (left == 0 && top == 0) {
-    labels[row][col] = next_label++;
-    return;
-  }
-
-  if (left != 0 && top == 0) {
-    labels[row][col] = left;
-    return;
-  }
-
-  if (left == 0 && top != 0) {
-    labels[row][col] = top;
-    return;
-  }
-
-  if (left == top) {
-    labels[row][col] = left;
-  } else {
-    int min_label = std::min(left, top);
-    int max_label = std::max(left, top);
-    labels[row][col] = min_label;
-    UnionLabels(parent, min_label, max_label);
-  }
-}
-
 }  // namespace
 
 MarinLMarkComponentsOMP::MarinLMarkComponentsOMP(const InType &in) {
@@ -171,7 +138,6 @@ void MarinLMarkComponentsOMP::FirstPass() {
     }
   }
 
-  // prefix sum
   for (int i = 1; i <= num_threads; ++i) {
     offsets[i] += offsets[i - 1];
   }
@@ -204,7 +170,6 @@ void MarinLMarkComponentsOMP::FirstPass() {
     }
   }
 
-  // merge границ
   for (int tid = 1; tid < num_threads; ++tid) {
     int r = tid * chunk;
     if (r >= height) {
