@@ -99,6 +99,7 @@ void MarinLMarkComponentsOMP::FirstPass() {
 
   std::vector<int> offsets(num_threads + 1, 0);
   std::vector<Labels> local_labels(num_threads);
+  std::vector<std::vector<int>> local_parent(num_threads);
   std::vector<int> local_next(num_threads, 1);
 
 #pragma omp parallel
@@ -112,6 +113,11 @@ void MarinLMarkComponentsOMP::FirstPass() {
       int local_h = end - start;
 
       local_labels[tid].assign(local_h, std::vector<int>(width, 0));
+      int max_labels = local_h * width + 1;
+      local_parent[tid].resize(max_labels);
+      for (int i = 0; i < max_labels; ++i) {
+        local_parent[tid][i] = i;
+      }
 
       for (int r = 0; r < local_h; ++r) {
         for (int c = 0; c < width; ++c) {
@@ -129,11 +135,17 @@ void MarinLMarkComponentsOMP::FirstPass() {
           } else if (left == 0 && top != 0) {
             local_labels[tid][r][c] = top;
           } else {
-            local_labels[tid][r][c] = std::min(left, top);
+            int mn = std::min(left, top);
+            int mx = std::max(left, top);
+            local_labels[tid][r][c] = mn;
+            UnionLabels(local_parent[tid], mn, mx);
           }
         }
       }
 
+      for (int i = 1; i < local_next[tid]; ++i) {
+        local_parent[tid][i] = FindRoot(local_parent[tid], i);
+      }
       offsets[tid + 1] = local_next[tid] - 1;
     }
   }
@@ -163,6 +175,7 @@ void MarinLMarkComponentsOMP::FirstPass() {
         for (int c = 0; c < width; ++c) {
           int val = local_labels[tid][r - start][c];
           if (val != 0) {
+            val = local_parent[tid][val];
             labels_[r][c] = val + shift;
           }
         }
