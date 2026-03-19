@@ -97,8 +97,74 @@ void MarinLMarkComponentsOMP::FirstPass() {
   int num_threads = omp_get_max_threads();
   int chunk = (height + num_threads - 1) / num_threads;
 
-  std::vector<int> parent(height * width + 1, 0);
-  for (int i = 0; i < (int)parent.size(); ++i) {
+  std::vector<Labels> local_labels(num_threads);
+  std::vector<std::vector<int>> local_parent(num_threads);
+  std::vector<int> local_next(num_threads, 1);
+  std::vector<int> offsets(num_threads + 1, 0);
+
+#pragma omp parallel
+  {
+    int tid = omp_get_thread_num();
+    int start = tid * chunk;
+    int end = std::min(height, start + chunk);
+
+    if (start < end) {
+      int local_h = end - start;
+
+      local_labels[tid].assign(local_h, std::vector<int>(width, 0));
+
+      int max_labels = local_h * width + 1;
+      local_parent[tid].resize(max_labels);
+      for (int i = 0; i < max_labels; ++i) {
+        local_parent[tid][i] = i;
+      }
+
+      // 🔥 cache-friendly: работаем по строкам подряд
+      for (int r = 0; r < local_h; ++r) {
+        auto &row = local_labels[tid][r];
+        auto &row_up = (r > 0) ? local_labels[tid][r - 1] : row;
+
+        for (int c = 0; c < width; ++c) {
+          if (binary_[start + r][c] == 0) {
+            continue;
+          }
+
+          int left = (c > 0) ? row[c - 1] : 0;
+          int top = (r > 0) ? row_up[c] : 0;
+
+          if (left == 0 && top == 0) {
+            row[c] = local_next[tid]++;
+          } else if (left != 0 && top == 0) {
+            row[c] = left;
+          } else if (left == 0 && top != 0) {
+            row[c] = top;
+          } else {
+            int mn = std::min(left, top);
+            int mx = std::max(left, top);
+            row[c] = mn;
+            UnionLabels(local_parent[tid], mn, mx);
+          }
+        }
+      }
+
+      // сжатие путей локально
+      for (int i = 1; i < local_next[tid]; ++i) {
+        local_parent[tid][i] = FindRoot(local_parent[tid], i);
+      }
+
+      offsets[tid + 1] = local_next[tid] - 1;
+    }
+  }
+
+  // prefix sum
+  for (int i = 1; i <= num_threads; ++i) {
+    offsets[i] += offsets[i - 1];
+  }
+
+  int total_labels = offsets[num_threads];
+
+  std::vector<int> parent(total_labels + 1);
+  for (int i = 0; i <= total_labels; ++i) {
     parent[i] = i;
   }
 
@@ -108,41 +174,24 @@ void MarinLMarkComponentsOMP::FirstPass() {
     int start = tid * chunk;
     int end = std::min(height, start + chunk);
 
-    int label = start * width + 1;  // уникальный диапазон меток
+    if (start < end) {
+      int shift = offsets[tid];
 
-    for (int r = start; r < end; ++r) {
-      for (int c = 0; c < width; ++c) {
-        if (binary_[r][c] == 0) {
-          labels_[r][c] = 0;
-          continue;
-        }
-
-        int left = (c > 0) ? labels_[r][c - 1] : 0;
-        int top = (r > start) ? labels_[r - 1][c] : 0;
-
-        if (left == 0 && top == 0) {
-          labels_[r][c] = label++;
-        } else if (left != 0 && top == 0) {
-          labels_[r][c] = left;
-        } else if (left == 0 && top != 0) {
-          labels_[r][c] = top;
-        } else {
-          int mn = std::min(left, top);
-          int mx = std::max(left, top);
-          labels_[r][c] = mn;
-
-#pragma omp critical
-          {
-            UnionLabels(parent, mn, mx);
+      for (int r = start; r < end; ++r) {
+        for (int c = 0; c < width; ++c) {
+          int val = local_labels[tid][r - start][c];
+          if (val != 0) {
+            val = local_parent[tid][val];
+            labels_[r][c] = val + shift;
           }
         }
       }
     }
   }
 
-  // 🔥 merge границ блоков (дёшево, мало операций)
-  for (int t = 1; t < num_threads; ++t) {
-    int r = t * chunk;
+  // 🔥 merge границ
+  for (int tid = 1; tid < num_threads; ++tid) {
+    int r = tid * chunk;
     if (r >= height) {
       continue;
     }
@@ -159,7 +208,7 @@ void MarinLMarkComponentsOMP::FirstPass() {
   }
 
 #pragma omp parallel for
-  for (int i = 1; i < (int)parent.size(); ++i) {
+  for (int i = 1; i <= total_labels; ++i) {
     parent[i] = FindRoot(parent, i);
   }
 
