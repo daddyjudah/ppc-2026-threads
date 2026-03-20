@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "marin_l_mark_components/common/include/common.hpp"
+
 namespace marin_l_mark_components {
 
 namespace {
@@ -28,7 +30,6 @@ void UnionLabels(std::vector<int> &parent, int a, int b) {
   if (root_a == root_b) {
     return;
   }
-
   if (root_a < root_b) {
     parent[root_b] = root_a;
   } else {
@@ -61,7 +62,7 @@ bool MarinLMarkComponentsOMP::ValidationImpl() {
     return false;
   }
 
-  size_t width = img.front().size();
+  const std::size_t width = img.front().size();
   for (const auto &row : img) {
     if (row.size() != width) {
       return false;
@@ -74,14 +75,14 @@ bool MarinLMarkComponentsOMP::ValidationImpl() {
 bool MarinLMarkComponentsOMP::PreProcessingImpl() {
   binary_ = GetInput().binary;
 
-  int height = static_cast<int>(binary_.size());
-  int width = static_cast<int>(binary_.front().size());
+  const int height = static_cast<int>(binary_.size());
+  const int width = static_cast<int>(binary_.front().size());
 
   if (height <= 0 || width <= 0) {
     return false;
   }
 
-  uint64_t pixels = static_cast<uint64_t>(height) * width;
+  const std::uint64_t pixels = static_cast<std::uint64_t>(height) * static_cast<std::uint64_t>(width);
   if (pixels > kMaxPixels) {
     return false;
   }
@@ -91,50 +92,56 @@ bool MarinLMarkComponentsOMP::PreProcessingImpl() {
 }
 
 void MarinLMarkComponentsOMP::FirstPass() {
-  int height = binary_.size();
-  int width = binary_[0].size();
+  const int height = static_cast<int>(binary_.size());
+  const int width = static_cast<int>(binary_[0].size());
 
-  int num_threads = omp_get_max_threads();
-  int chunk = (height + num_threads - 1) / num_threads;
+  const int num_threads = omp_get_max_threads();
+  const int chunk = (height + num_threads - 1) / num_threads;
 
-  std::vector<int> parent(height * width + 1);
-  for (int i = 0; i < (int)parent.size(); ++i) {
-    parent[i] = i;
+  std::vector<int> parent((height * width) + 1);
+  for (std::size_t index = 0; index < parent.size(); ++index) {
+    parent[index] = static_cast<int>(index);
   }
 
-#pragma omp parallel
+  auto &labels = labels_;
+  const auto &binary = binary_;
+
+#pragma omp parallel default(none) shared(parent, height, width, chunk, num_threads, labels, binary)
   {
-    int tid = omp_get_thread_num();
-    int start = tid * chunk;
-    int end = std::min(height, start + chunk);
+    const int thread_id = omp_get_thread_num();
+    const int start_row = thread_id * chunk;
+    int end_row = start_row + chunk;
+    if (end_row > height) {
+      end_row = height;
+    }
 
-    if (start < end) {
-      int label = start * width + 1;
+    if (start_row < end_row) {
+      int label = (start_row * width) + 1;
 
-      for (int r = start; r < end; ++r) {
-        auto &row = labels_[r];
+      for (int row_idx = start_row; row_idx < end_row; ++row_idx) {
+        auto &row = labels[row_idx];
 
-        for (int c = 0; c < width; ++c) {
-          if (!binary_[r][c]) {
-            row[c] = 0;
+        for (int col_idx = 0; col_idx < width; ++col_idx) {
+          if (binary[row_idx][col_idx] == 0) {
+            row[col_idx] = 0;
             continue;
           }
 
-          int left = (c > 0) ? row[c - 1] : 0;
-          int top = (r > start) ? labels_[r - 1][c] : 0;
+          const int left = (col_idx > 0) ? row[col_idx - 1] : 0;
+          const int top = (row_idx > start_row) ? labels[row_idx - 1][col_idx] : 0;
 
           if (left == 0 && top == 0) {
-            row[c] = label++;
+            row[col_idx] = label++;
           } else if (left != 0 && top == 0) {
-            row[c] = left;
+            row[col_idx] = left;
           } else if (left == 0 && top != 0) {
-            row[c] = top;
+            row[col_idx] = top;
           } else {
-            int mn = std::min(left, top);
-            int mx = std::max(left, top);
-            row[c] = mn;
+            const int mn = (left < top) ? left : top;
+            const int mx = (left > top) ? left : top;
 
-            // 🔥 редкий случай → можно позволить critical
+            row[col_idx] = mn;
+
 #pragma omp critical
             {
               UnionLabels(parent, mn, mx);
@@ -145,17 +152,17 @@ void MarinLMarkComponentsOMP::FirstPass() {
     }
   }
 
-  // 🔥 merge границ блоков
-  for (int t = 1; t < num_threads; ++t) {
-    int r = t * chunk;
-    if (r >= height) {
+  for (int thread_idx = 1; thread_idx < num_threads; ++thread_idx) {
+    const int row_idx = thread_idx * chunk;
+    if (row_idx >= height) {
       continue;
     }
 
-    for (int c = 0; c < width; ++c) {
-      if (binary_[r][c] && binary_[r - 1][c]) {
-        int a = labels_[r][c];
-        int b = labels_[r - 1][c];
+    for (int col_idx = 0; col_idx < width; ++col_idx) {
+      if (binary[row_idx][col_idx] != 0 && binary[row_idx - 1][col_idx] != 0) {
+        const int a = labels[row_idx][col_idx];
+        const int b = labels[row_idx - 1][col_idx];
+
         if (a != b) {
           UnionLabels(parent, a, b);
         }
@@ -163,31 +170,31 @@ void MarinLMarkComponentsOMP::FirstPass() {
     }
   }
 
-#pragma omp parallel for
-  for (int i = 1; i < (int)parent.size(); ++i) {
-    parent[i] = FindRoot(parent, i);
+#pragma omp parallel for default(none) shared(parent)
+  for (std::size_t index = 1; index < parent.size(); ++index) {
+    parent[index] = FindRoot(parent, static_cast<int>(index));
   }
 
-#pragma omp parallel for collapse(2)
-  for (int r = 0; r < height; ++r) {
-    for (int c = 0; c < width; ++c) {
-      if (labels_[r][c]) {
-        labels_[r][c] = parent[labels_[r][c]];
+#pragma omp parallel for collapse(2) default(none) shared(height, width, labels, parent)
+  for (int row_idx = 0; row_idx < height; ++row_idx) {
+    for (int col_idx = 0; col_idx < width; ++col_idx) {
+      if (labels[row_idx][col_idx] != 0) {
+        labels[row_idx][col_idx] = parent[labels[row_idx][col_idx]];
       }
     }
   }
 }
 
 void MarinLMarkComponentsOMP::SecondPass() {
-  int height = labels_.size();
-  int width = labels_[0].size();
+  const int height = static_cast<int>(labels_.size());
+  const int width = static_cast<int>(labels_[0].size());
 
   int max_label = 0;
 
-#pragma omp parallel for reduction(max : max_label) collapse(2)
-  for (int r = 0; r < height; ++r) {
-    for (int c = 0; c < width; ++c) {
-      max_label = std::max(max_label, labels_[r][c]);
+#pragma omp parallel for reduction(max : max_label) collapse(2) default(none) shared(height, width)
+  for (int row_idx = 0; row_idx < height; ++row_idx) {
+    for (int col_idx = 0; col_idx < width; ++col_idx) {
+      max_label = std::max(max_label, labels_[row_idx][col_idx]);
     }
   }
 
@@ -197,29 +204,29 @@ void MarinLMarkComponentsOMP::SecondPass() {
 
   std::vector<char> used(max_label + 1, 0);
 
-#pragma omp parallel for collapse(2)
-  for (int r = 0; r < height; ++r) {
-    for (int c = 0; c < width; ++c) {
-      if (labels_[r][c] != 0) {
-        used[labels_[r][c]] = 1;
+#pragma omp parallel for collapse(2) default(none) shared(height, width, used)
+  for (int row_idx = 0; row_idx < height; ++row_idx) {
+    for (int col_idx = 0; col_idx < width; ++col_idx) {
+      if (labels_[row_idx][col_idx] != 0) {
+        used[labels_[row_idx][col_idx]] = 1;
       }
     }
   }
 
   std::vector<int> map(max_label + 1, 0);
-  int next = 1;
+  int next_label = 1;
 
-  for (int i = 1; i <= max_label; ++i) {
-    if (used[i]) {
-      map[i] = next++;
+  for (int label_idx = 1; label_idx <= max_label; ++label_idx) {
+    if (used[label_idx] != 0) {
+      map[label_idx] = next_label++;
     }
   }
 
-#pragma omp parallel for collapse(2)
-  for (int r = 0; r < height; ++r) {
-    for (int c = 0; c < width; ++c) {
-      if (labels_[r][c] != 0) {
-        labels_[r][c] = map[labels_[r][c]];
+#pragma omp parallel for collapse(2) default(none) shared(height, width, map)
+  for (int row_idx = 0; row_idx < height; ++row_idx) {
+    for (int col_idx = 0; col_idx < width; ++col_idx) {
+      if (labels_[row_idx][col_idx] != 0) {
+        labels_[row_idx][col_idx] = map[labels_[row_idx][col_idx]];
       }
     }
   }
