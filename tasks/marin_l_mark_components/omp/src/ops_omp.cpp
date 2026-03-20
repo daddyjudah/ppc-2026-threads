@@ -48,6 +48,69 @@ inline int ResolveLabel(int left, int top) {
   return std::min(left, top);
 }
 
+inline void ProcessPixel(std::vector<int> &parent, std::vector<std::vector<int>> &labels,
+                         const std::vector<std::vector<int>> &binary, int row, int col, int start_row, int &label) {
+  auto &current_row = labels[row];
+
+  if (binary[row][col] == 0) {
+    current_row[col] = 0;
+    return;
+  }
+
+  const int left = (col > 0) ? current_row[col - 1] : 0;
+  const int top = (row > start_row) ? labels[row - 1][col] : 0;
+
+  if (left == 0 && top == 0) {
+    current_row[col] = label++;
+    return;
+  }
+
+  const int min_label = ResolveLabel(left, top);
+  current_row[col] = min_label;
+
+  if (left != 0 && top != 0 && left != top) {
+#pragma omp critical
+    UnionLabels(parent, left, top);
+  }
+}
+
+int FindMaxLabel(const Labels &labels, int height, int width) {
+  int max_label = 0;
+
+#pragma omp parallel for reduction(max : max_label) collapse(2) default(none) shared(labels, height, width)
+  for (int row = 0; row < height; ++row) {
+    for (int col = 0; col < width; ++col) {
+      max_label = std::max(max_label, labels[row][col]);
+    }
+  }
+
+  return max_label;
+}
+
+void FillUsed(const Labels &labels, std::vector<char> &used, int height, int width) {
+#pragma omp parallel for collapse(2) default(none) shared(labels, used, height, width)
+  for (int row = 0; row < height; ++row) {
+    for (int col = 0; col < width; ++col) {
+      const int val = labels[row][col];
+      if (val != 0) {
+        used[val] = 1;
+      }
+    }
+  }
+}
+
+void ApplyMap(Labels &labels, const std::vector<int> &map, int height, int width) {
+#pragma omp parallel for collapse(2) default(none) shared(labels, map, height, width)
+  for (int row = 0; row < height; ++row) {
+    for (int col = 0; col < width; ++col) {
+      const int val = labels[row][col];
+      if (val != 0) {
+        labels[row][col] = map[val];
+      }
+    }
+  }
+}
+
 }  // namespace
 
 MarinLMarkComponentsOMP::MarinLMarkComponentsOMP(const InType &in) {
@@ -107,29 +170,8 @@ void MarinLMarkComponentsOMP::ProcessChunk(std::vector<int> &parent, int start_r
   int label = (start_row * width) + 1;
 
   for (int row = start_row; row < end_row; ++row) {
-    auto &current_row = labels_[row];
-
     for (int col = 0; col < width; ++col) {
-      if (binary_[row][col] == 0) {
-        current_row[col] = 0;
-        continue;
-      }
-
-      const int left = (col > 0) ? current_row[col - 1] : 0;
-      const int top = (row > start_row) ? labels_[row - 1][col] : 0;
-
-      if (left == 0 && top == 0) {
-        current_row[col] = label++;
-        continue;
-      }
-
-      const int min_label = ResolveLabel(left, top);
-      current_row[col] = min_label;
-
-      if (left != 0 && top != 0 && left != top) {
-#pragma omp critical
-        UnionLabels(parent, left, top);
-      }
+      ProcessPixel(parent, labels_, binary_, row, col, start_row, label);
     }
   }
 }
@@ -203,30 +245,14 @@ void MarinLMarkComponentsOMP::SecondPass() {
   const int height = static_cast<int>(labels_.size());
   const int width = static_cast<int>(labels_[0].size());
 
-  int max_label = 0;
-
-#pragma omp parallel for reduction(max : max_label) collapse(2) default(none) shared(height, width)
-  for (int row = 0; row < height; ++row) {
-    for (int col = 0; col < width; ++col) {
-      max_label = std::max(max_label, labels_[row][col]);
-    }
-  }
+  const int max_label = FindMaxLabel(labels_, height, width);
 
   if (max_label == 0) {
     return;
   }
 
   std::vector<char> used(max_label + 1, 0);
-
-#pragma omp parallel for collapse(2) default(none) shared(height, width, used)
-  for (int row = 0; row < height; ++row) {
-    for (int col = 0; col < width; ++col) {
-      const int val = labels_[row][col];
-      if (val != 0) {
-        used[val] = 1;
-      }
-    }
-  }
+  FillUsed(labels_, used, height, width);
 
   std::vector<int> map(max_label + 1, 0);
 
@@ -237,15 +263,7 @@ void MarinLMarkComponentsOMP::SecondPass() {
     }
   }
 
-#pragma omp parallel for collapse(2) default(none) shared(height, width, map)
-  for (int row = 0; row < height; ++row) {
-    for (int col = 0; col < width; ++col) {
-      const int val = labels_[row][col];
-      if (val != 0) {
-        labels_[row][col] = map[val];
-      }
-    }
-  }
+  ApplyMap(labels_, map, height, width);
 }
 
 bool MarinLMarkComponentsOMP::RunImpl() {
