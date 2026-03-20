@@ -106,25 +106,25 @@ bool MarinLMarkComponentsOMP::PreProcessingImpl() {
 void MarinLMarkComponentsOMP::ProcessChunk(std::vector<int> &parent, int start_row, int end_row, int width) {
   int label = (start_row * width) + 1;
 
-  for (int row_idx = start_row; row_idx < end_row; ++row_idx) {
-    auto &row = labels_[row_idx];
+  for (int row = start_row; row < end_row; ++row) {
+    auto &current_row = labels_[row];
 
-    for (int col_idx = 0; col_idx < width; ++col_idx) {
-      if (binary_[row_idx][col_idx] == 0) {
-        row[col_idx] = 0;
+    for (int col = 0; col < width; ++col) {
+      if (binary_[row][col] == 0) {
+        current_row[col] = 0;
         continue;
       }
 
-      const int left = (col_idx > 0) ? row[col_idx - 1] : 0;
-      const int top = (row_idx > start_row) ? labels_[row_idx - 1][col_idx] : 0;
+      const int left = (col > 0) ? current_row[col - 1] : 0;
+      const int top = (row > start_row) ? labels_[row - 1][col] : 0;
 
       if (left == 0 && top == 0) {
-        row[col_idx] = label++;
+        current_row[col] = label++;
         continue;
       }
 
-      const int mn = ResolveLabel(left, top);
-      row[col_idx] = mn;
+      const int min_label = ResolveLabel(left, top);
+      current_row[col] = min_label;
 
       if (left != 0 && top != 0 && left != top) {
 #pragma omp critical
@@ -136,8 +136,8 @@ void MarinLMarkComponentsOMP::ProcessChunk(std::vector<int> &parent, int start_r
 
 void MarinLMarkComponentsOMP::MergeBorders(std::vector<int> &parent, int height, int width, int chunk,
                                            int num_threads) {
-  for (int t = 1; t < num_threads; ++t) {
-    const int row = t * chunk;
+  for (int thread_idx = 1; thread_idx < num_threads; ++thread_idx) {
+    const int row = thread_idx * chunk;
     if (row >= height) {
       continue;
     }
@@ -164,8 +164,9 @@ void MarinLMarkComponentsOMP::FirstPass() {
   const int num_threads = omp_get_max_threads();
   const int chunk = (height + num_threads - 1) / num_threads;
 
-  std::vector<int> parent(height * width + 1);
-#pragma omp parallel for
+  std::vector<int> parent((height * width) + 1);
+
+#pragma omp parallel for default(none) shared(parent)
   for (std::size_t i = 0; i < parent.size(); ++i) {
     parent[i] = static_cast<int>(i);
   }
@@ -183,16 +184,16 @@ void MarinLMarkComponentsOMP::FirstPass() {
 
   MergeBorders(parent, height, width, chunk, num_threads);
 
-#pragma omp parallel for
+#pragma omp parallel for default(none) shared(parent)
   for (std::size_t i = 1; i < parent.size(); ++i) {
     parent[i] = FindRoot(parent, static_cast<int>(i));
   }
 
-#pragma omp parallel for collapse(2)
-  for (int r = 0; r < height; ++r) {
-    for (int c = 0; c < width; ++c) {
-      if (labels_[r][c] != 0) {
-        labels_[r][c] = parent[labels_[r][c]];
+#pragma omp parallel for collapse(2) default(none) shared(height, width, parent)
+  for (int row = 0; row < height; ++row) {
+    for (int col = 0; col < width; ++col) {
+      if (labels_[row][col] != 0) {
+        labels_[row][col] = parent[labels_[row][col]];
       }
     }
   }
@@ -204,10 +205,10 @@ void MarinLMarkComponentsOMP::SecondPass() {
 
   int max_label = 0;
 
-#pragma omp parallel for reduction(max : max_label) collapse(2)
-  for (int r = 0; r < height; ++r) {
-    for (int c = 0; c < width; ++c) {
-      max_label = std::max(max_label, labels_[r][c]);
+#pragma omp parallel for reduction(max : max_label) collapse(2) default(none) shared(height, width)
+  for (int row = 0; row < height; ++row) {
+    for (int col = 0; col < width; ++col) {
+      max_label = std::max(max_label, labels_[row][col]);
     }
   }
 
@@ -217,10 +218,10 @@ void MarinLMarkComponentsOMP::SecondPass() {
 
   std::vector<char> used(max_label + 1, 0);
 
-#pragma omp parallel for collapse(2)
-  for (int r = 0; r < height; ++r) {
-    for (int c = 0; c < width; ++c) {
-      const int val = labels_[r][c];
+#pragma omp parallel for collapse(2) default(none) shared(height, width, used)
+  for (int row = 0; row < height; ++row) {
+    for (int col = 0; col < width; ++col) {
+      const int val = labels_[row][col];
       if (val != 0) {
         used[val] = 1;
       }
@@ -231,17 +232,17 @@ void MarinLMarkComponentsOMP::SecondPass() {
 
   int next = 1;
   for (int i = 1; i <= max_label; ++i) {
-    if (used[i]) {
+    if (used[i] != 0) {
       map[i] = next++;
     }
   }
 
-#pragma omp parallel for collapse(2)
-  for (int r = 0; r < height; ++r) {
-    for (int c = 0; c < width; ++c) {
-      const int val = labels_[r][c];
+#pragma omp parallel for collapse(2) default(none) shared(height, width, map)
+  for (int row = 0; row < height; ++row) {
+    for (int col = 0; col < width; ++col) {
+      const int val = labels_[row][col];
       if (val != 0) {
-        labels_[r][c] = map[val];
+        labels_[row][col] = map[val];
       }
     }
   }
