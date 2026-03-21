@@ -48,8 +48,8 @@ inline int ResolveLabel(int left, int top) {
   return std::min(left, top);
 }
 
-inline void ProcessPixel(std::vector<int> &parent, std::vector<std::vector<int>> &labels,
-                         const std::vector<std::vector<int>> &binary, int row, int col, int start_row, int &label) {
+inline void ProcessPixel(std::vector<std::vector<int>> &labels, const std::vector<std::vector<int>> &binary, int row,
+                         int col, int start_row, int &label) {
   auto &current_row = labels[row];
 
   if (binary[row][col] == 0) {
@@ -65,13 +65,7 @@ inline void ProcessPixel(std::vector<int> &parent, std::vector<std::vector<int>>
     return;
   }
 
-  const int min_label = ResolveLabel(left, top);
-  current_row[col] = min_label;
-
-  if (left != 0 && top != 0 && left != top) {
-#pragma omp critical
-    UnionLabels(parent, left, top);
-  }
+  current_row[col] = (left == 0) ? top : ((top == 0) ? left : std::min(left, top));
 }
 
 int FindMaxLabel(const Labels &labels, int height, int width) {
@@ -166,18 +160,19 @@ bool MarinLMarkComponentsOMP::PreProcessingImpl() {
   return true;
 }
 
-void MarinLMarkComponentsOMP::ProcessChunk(std::vector<int> &parent, int start_row, int end_row, int width) {
+void MarinLMarkComponentsOMP::ProcessChunk(std::vector<int> & /*parent*/, int start_row, int end_row, int width) {
   int label = (start_row * width) + 1;
 
   for (int row = start_row; row < end_row; ++row) {
     for (int col = 0; col < width; ++col) {
-      ProcessPixel(parent, labels_, binary_, row, col, start_row, label);
+      ProcessPixel(labels_, binary_, row, col, start_row, label);
     }
   }
 }
 
 void MarinLMarkComponentsOMP::MergeBorders(std::vector<int> &parent, int height, int width, int chunk,
                                            int num_threads) {
+#pragma omp parallel for
   for (int thread_idx = 1; thread_idx < num_threads; ++thread_idx) {
     const int row = thread_idx * chunk;
     if (row >= height) {
@@ -193,6 +188,7 @@ void MarinLMarkComponentsOMP::MergeBorders(std::vector<int> &parent, int height,
       const int b = labels_[row - 1][col];
 
       if (a != b) {
+#pragma omp critical
         UnionLabels(parent, a, b);
       }
     }
