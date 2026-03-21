@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include "marin_l_mark_components/common/include/common.hpp"
@@ -23,15 +24,24 @@ class MarinLMarkComponentsOMP : public BaseTask {
 
   static bool IsBinary(const Image &img);
 
-  void FirstPass();
-  void SecondPass();
+  void FirstPassOMP();
+  void MergeStripeBorders();
+  void SecondPassOMP();
+  void ConvertLabelsToOutput();
 
-  void ProcessChunk(int start_row, int end_row, int width);
-
-  void MergeBorders(std::vector<int> &parent, int height, int width, int chunk, int num_threads);
-
-  Image binary_;
+  std::vector<std::uint8_t> binary_;
+  std::vector<int> labels_flat_;
   Labels labels_;
+  std::vector<int> parent_;
+  std::vector<int> stripe_offsets_;
+  std::vector<int> stripe_used_counts_;
+  std::vector<int> root_to_compact_;
+  std::vector<int> root_generation_;
+  int height_ = 0;
+  int width_ = 0;
+  int stripe_count_ = 1;
+  int max_label_id_ = 0;
+  int generation_id_ = 1;
 };
 
 }  // namespace marin_l_mark_components
