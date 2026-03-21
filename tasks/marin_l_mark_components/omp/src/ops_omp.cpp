@@ -23,18 +23,22 @@ int FindRoot(std::vector<int> &parent, int x) {
   return x;
 }
 
-void UnionLabels(std::vector<int> &parent, int a, int b) {
-  const int root_a = FindRoot(parent, a);
-  const int root_b = FindRoot(parent, b);
+inline void UnionLabelsFast(int *parent, int a, int b) {
+  while (parent[a] != a) {
+    a = parent[a];
+  }
+  while (parent[b] != b) {
+    b = parent[b];
+  }
 
-  if (root_a == root_b) {
+  if (a == b) {
     return;
   }
 
-  if (root_a < root_b) {
-    parent[root_b] = root_a;
+  if (a < b) {
+    parent[b] = a;
   } else {
-    parent[root_a] = root_b;
+    parent[a] = b;
   }
 }
 
@@ -59,6 +63,7 @@ inline void ProcessPixel(std::vector<std::vector<int>> &labels, const std::vecto
 }
 
 // void LocalMerge(std::vector<int> &parent, Labels &labels, int start_row, int end_row, int width) {
+//   int* parent_data = parent.data();
 //   for (int row = start_row; row < end_row; ++row) {
 //     auto &cur_row = labels[row];
 //     auto &prev_row = (row > start_row) ? labels[row - 1] : cur_row;
@@ -72,14 +77,14 @@ inline void ProcessPixel(std::vector<std::vector<int>> &labels, const std::vecto
 //       if (col > 0) {
 //         int left = cur_row[col - 1];
 //         if (left != 0) {
-//           UnionLabels(parent, cur, left);
+//           UnionLabelsFast(parent_data, cur, left);
 //         }
 //       }
 
 //       if (row > start_row) {
 //         int top = prev_row[col];
 //         if (top != 0) {
-//           UnionLabels(parent, cur, top);
+//           UnionLabelsFast(parent_data, cur, top);
 //         }
 //       }
 //     }
@@ -192,6 +197,7 @@ void MarinLMarkComponentsOMP::ProcessChunk(int start_row, int end_row, int width
 
 void MarinLMarkComponentsOMP::MergeBorders(std::vector<int> &parent, int height, int width, int chunk,
                                            int num_threads) {
+  int *parent_data = parent.data();
 #pragma omp parallel for
   for (int thread_idx = 1; thread_idx < num_threads; ++thread_idx) {
     const int row = thread_idx * chunk;
@@ -208,7 +214,7 @@ void MarinLMarkComponentsOMP::MergeBorders(std::vector<int> &parent, int height,
       const int b = labels_[row - 1][col];
 
       if (a != b) {
-        UnionLabels(parent, a, b);
+        UnionLabelsFast(parent_data, a, b);
       }
     }
   }
@@ -233,32 +239,41 @@ void MarinLMarkComponentsOMP::FirstPass() {
     const int tid = omp_get_thread_num();
     const int start = tid * chunk;
     const int end = std::min(start + chunk, height);
+    int *parent_data = parent.data();
 
     if (start < end) {
       int label = start * width + 1;
 
       for (int row = start; row < end; ++row) {
         auto &cur = labels_[row];
+        auto &prev = (row > 0) ? labels_[row - 1] : cur;
 
         for (int col = 0; col < width; ++col) {
-          if (binary_[row][col] == 0) {
+          if (!binary_[row][col]) {
             cur[col] = 0;
             continue;
           }
 
           int left = (col > 0) ? cur[col - 1] : 0;
-          int top = (row > start) ? labels_[row - 1][col] : 0;
+          int top = (row > 0) ? prev[col] : 0;
 
-          if (left == 0 && top == 0) {
+          if (!left && !top) {
             cur[col] = label++;
+          } else if (left && top) {
+            cur[col] = std::min(left, top);
+
+            if (left != top) {
+              UnionLabelsFast(parent_data, left, top);
+            }
           } else {
-            cur[col] = (left == 0) ? top : ((top == 0) ? left : std::min(left, top));
+            cur[col] = left ? left : top;
           }
         }
       }
     }
   }
 
+  int *parent_data = parent.data();
 #pragma omp parallel for schedule(static)
   for (int t = 1; t < num_threads; ++t) {
     int row = t * chunk;
@@ -271,7 +286,7 @@ void MarinLMarkComponentsOMP::FirstPass() {
       int b = labels_[row - 1][col];
 
       if (a && b && a != b) {
-        UnionLabels(parent, a, b);
+        UnionLabelsFast(parent_data, a, b);
       }
     }
   }
