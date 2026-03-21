@@ -26,7 +26,7 @@ class MarinLMarkComponentsOMP : public BaseTask {
   void FirstPass();
   void SecondPass();
 
-  void ProcessChunk(std::vector<int> &parent, int start_row, int end_row, int width);
+  void ProcessChunk(int start_row, int end_row, int width);
 
   void MergeBorders(std::vector<int> &parent, int height, int width, int chunk, int num_threads);
 

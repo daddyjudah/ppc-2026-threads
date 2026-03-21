@@ -58,6 +58,34 @@ inline void ProcessPixel(std::vector<std::vector<int>> &labels, const std::vecto
   current_row[col] = (left == 0) ? top : ((top == 0) ? left : std::min(left, top));
 }
 
+void LocalMerge(std::vector<int> &parent, Labels &labels, int start_row, int end_row, int width) {
+  for (int row = start_row; row < end_row; ++row) {
+    auto &cur_row = labels[row];
+    auto &prev_row = (row > start_row) ? labels[row - 1] : cur_row;
+
+    for (int col = 0; col < width; ++col) {
+      int cur = cur_row[col];
+      if (cur == 0) {
+        continue;
+      }
+
+      if (col > 0) {
+        int left = cur_row[col - 1];
+        if (left != 0) {
+          UnionLabels(parent, cur, left);
+        }
+      }
+
+      if (row > start_row) {
+        int top = prev_row[col];
+        if (top != 0) {
+          UnionLabels(parent, cur, top);
+        }
+      }
+    }
+  }
+}
+
 int FindMaxLabel(const Labels &labels, int height, int width) {
   int max_label = 0;
 
@@ -72,7 +100,7 @@ int FindMaxLabel(const Labels &labels, int height, int width) {
 }
 
 void FillUsed(const Labels &labels, std::vector<char> &used, int height, int width) {
-#pragma omp parallel for collapse(2) default(none) shared(labels, used, height, width)
+#pragma omp parallel for default(none) shared(labels, used, height, width)
   for (int row = 0; row < height; ++row) {
     for (int col = 0; col < width; ++col) {
       const int val = labels[row][col];
@@ -84,7 +112,7 @@ void FillUsed(const Labels &labels, std::vector<char> &used, int height, int wid
 }
 
 void ApplyMap(Labels &labels, const std::vector<int> &map, int height, int width) {
-#pragma omp parallel for collapse(2) default(none) shared(labels, map, height, width)
+#pragma omp parallel for default(none) shared(labels, map, height, width)
   for (int row = 0; row < height; ++row) {
     for (int col = 0; col < width; ++col) {
       const int val = labels[row][col];
@@ -150,7 +178,7 @@ bool MarinLMarkComponentsOMP::PreProcessingImpl() {
   return true;
 }
 
-void MarinLMarkComponentsOMP::ProcessChunk(std::vector<int> & /*parent*/, int start_row, int end_row, int width) {
+void MarinLMarkComponentsOMP::ProcessChunk(int start_row, int end_row, int width) {
   int label = (start_row * width) + 1;
 
   for (int row = start_row; row < end_row; ++row) {
@@ -178,7 +206,6 @@ void MarinLMarkComponentsOMP::MergeBorders(std::vector<int> &parent, int height,
       const int b = labels_[row - 1][col];
 
       if (a != b) {
-#pragma omp critical
         UnionLabels(parent, a, b);
       }
     }
@@ -206,7 +233,8 @@ void MarinLMarkComponentsOMP::FirstPass() {
     const int end = std::min(start + chunk, height);
 
     if (start < end) {
-      ProcessChunk(parent, start, end, width);
+      ProcessChunk(start, end, width);
+      LocalMerge(parent, labels_, start, end, width);
     }
   }
 
@@ -217,7 +245,7 @@ void MarinLMarkComponentsOMP::FirstPass() {
     parent[i] = FindRoot(parent, static_cast<int>(i));
   }
 
-#pragma omp parallel for collapse(2) default(none) shared(height, width, parent)
+#pragma omp parallel for default(none) shared(height, width, parent)
   for (int row = 0; row < height; ++row) {
     for (int col = 0; col < width; ++col) {
       if (labels_[row][col] != 0) {
