@@ -38,16 +38,6 @@ void UnionLabels(std::vector<int> &parent, int a, int b) {
   }
 }
 
-inline int ResolveLabel(int left, int top) {
-  if (left == 0) {
-    return top;
-  }
-  if (top == 0) {
-    return left;
-  }
-  return std::min(left, top);
-}
-
 inline void ProcessPixel(std::vector<std::vector<int>> &labels, const std::vector<std::vector<int>> &binary, int row,
                          int col, int start_row, int &label) {
   auto &current_row = labels[row];
