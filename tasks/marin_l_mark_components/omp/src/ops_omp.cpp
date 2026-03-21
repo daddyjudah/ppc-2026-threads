@@ -58,38 +58,38 @@ inline void ProcessPixel(std::vector<std::vector<int>> &labels, const std::vecto
   current_row[col] = (left == 0) ? top : ((top == 0) ? left : std::min(left, top));
 }
 
-void LocalMerge(std::vector<int> &parent, Labels &labels, int start_row, int end_row, int width) {
-  for (int row = start_row; row < end_row; ++row) {
-    auto &cur_row = labels[row];
-    auto &prev_row = (row > start_row) ? labels[row - 1] : cur_row;
+// void LocalMerge(std::vector<int> &parent, Labels &labels, int start_row, int end_row, int width) {
+//   for (int row = start_row; row < end_row; ++row) {
+//     auto &cur_row = labels[row];
+//     auto &prev_row = (row > start_row) ? labels[row - 1] : cur_row;
 
-    for (int col = 0; col < width; ++col) {
-      int cur = cur_row[col];
-      if (cur == 0) {
-        continue;
-      }
+//     for (int col = 0; col < width; ++col) {
+//       int cur = cur_row[col];
+//       if (cur == 0) {
+//         continue;
+//       }
 
-      if (col > 0) {
-        int left = cur_row[col - 1];
-        if (left != 0) {
-          UnionLabels(parent, cur, left);
-        }
-      }
+//       if (col > 0) {
+//         int left = cur_row[col - 1];
+//         if (left != 0) {
+//           UnionLabels(parent, cur, left);
+//         }
+//       }
 
-      if (row > start_row) {
-        int top = prev_row[col];
-        if (top != 0) {
-          UnionLabels(parent, cur, top);
-        }
-      }
-    }
-  }
-}
+//       if (row > start_row) {
+//         int top = prev_row[col];
+//         if (top != 0) {
+//           UnionLabels(parent, cur, top);
+//         }
+//       }
+//     }
+//   }
+// }
 
 int FindMaxLabel(const Labels &labels, int height, int width) {
   int max_label = 0;
 
-#pragma omp parallel for reduction(max : max_label) collapse(2) default(none) shared(labels, height, width)
+#pragma omp parallel for reduction(max : max_label) default(none) shared(labels, height, width)
   for (int row = 0; row < height; ++row) {
     for (int col = 0; col < width; ++col) {
       max_label = std::max(max_label, labels[row][col]);
@@ -100,24 +100,26 @@ int FindMaxLabel(const Labels &labels, int height, int width) {
 }
 
 void FillUsed(const Labels &labels, std::vector<char> &used, int height, int width) {
-#pragma omp parallel for default(none) shared(labels, used, height, width)
+#pragma omp parallel for schedule(static)
   for (int row = 0; row < height; ++row) {
+    const auto &r = labels[row];
     for (int col = 0; col < width; ++col) {
-      const int val = labels[row][col];
-      if (val != 0) {
-        used[val] = 1;
+      int v = r[col];
+      if (v) {
+        used[v] = 1;
       }
     }
   }
 }
 
 void ApplyMap(Labels &labels, const std::vector<int> &map, int height, int width) {
-#pragma omp parallel for default(none) shared(labels, map, height, width)
+#pragma omp parallel for schedule(static)
   for (int row = 0; row < height; ++row) {
+    auto &r = labels[row];
     for (int col = 0; col < width; ++col) {
-      const int val = labels[row][col];
-      if (val != 0) {
-        labels[row][col] = map[val];
+      int v = r[col];
+      if (v) {
+        r[col] = map[v];
       }
     }
   }
@@ -219,37 +221,72 @@ void MarinLMarkComponentsOMP::FirstPass() {
   const int num_threads = omp_get_max_threads();
   const int chunk = (height + num_threads - 1) / num_threads;
 
-  std::vector<int> parent((height * width) + 1);
+  std::vector<int> parent(height * width + 1);
 
-#pragma omp parallel for default(none) shared(parent)
-  for (std::size_t i = 0; i < parent.size(); ++i) {
-    parent[i] = static_cast<int>(i);
+#pragma omp parallel for schedule(static)
+  for (int i = 0; i < (int)parent.size(); ++i) {
+    parent[i] = i;
   }
 
-#pragma omp parallel default(none) shared(parent, height, width, chunk)
+#pragma omp parallel
   {
     const int tid = omp_get_thread_num();
     const int start = tid * chunk;
     const int end = std::min(start + chunk, height);
 
     if (start < end) {
-      ProcessChunk(start, end, width);
-      LocalMerge(parent, labels_, start, end, width);
+      int label = start * width + 1;
+
+      for (int row = start; row < end; ++row) {
+        auto &cur = labels_[row];
+
+        for (int col = 0; col < width; ++col) {
+          if (binary_[row][col] == 0) {
+            cur[col] = 0;
+            continue;
+          }
+
+          int left = (col > 0) ? cur[col - 1] : 0;
+          int top = (row > start) ? labels_[row - 1][col] : 0;
+
+          if (left == 0 && top == 0) {
+            cur[col] = label++;
+          } else {
+            cur[col] = (left == 0) ? top : ((top == 0) ? left : std::min(left, top));
+          }
+        }
+      }
     }
   }
 
-  MergeBorders(parent, height, width, chunk, num_threads);
+#pragma omp parallel for schedule(static)
+  for (int t = 1; t < num_threads; ++t) {
+    int row = t * chunk;
+    if (row >= height) {
+      continue;
+    }
 
-#pragma omp parallel for default(none) shared(parent)
-  for (std::size_t i = 1; i < parent.size(); ++i) {
-    parent[i] = FindRoot(parent, static_cast<int>(i));
+    for (int col = 0; col < width; ++col) {
+      int a = labels_[row][col];
+      int b = labels_[row - 1][col];
+
+      if (a && b && a != b) {
+        UnionLabels(parent, a, b);
+      }
+    }
   }
 
-#pragma omp parallel for default(none) shared(height, width, parent)
+#pragma omp parallel for schedule(static)
+  for (int i = 1; i < (int)parent.size(); ++i) {
+    parent[i] = FindRoot(parent, i);
+  }
+
+#pragma omp parallel for schedule(static)
   for (int row = 0; row < height; ++row) {
     for (int col = 0; col < width; ++col) {
-      if (labels_[row][col] != 0) {
-        labels_[row][col] = parent[labels_[row][col]];
+      int v = labels_[row][col];
+      if (v) {
+        labels_[row][col] = parent[v];
       }
     }
   }
