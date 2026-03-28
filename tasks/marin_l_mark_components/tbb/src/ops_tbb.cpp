@@ -71,33 +71,37 @@ void MarinLMarkComponentsTBB::FirstPassTBB() {
   const uint8_t *b_ptr = binary_flat_.data();
   int w = width_;
 
-  tbb::parallel_for(tbb::blocked_range<int>(0, height_, 128), [&](const tbb::blocked_range<int> &range) {
+  tbb::parallel_for(tbb::blocked_range<int>(0, height_, 64), [&](const tbb::blocked_range<int> &range) {
     for (int r = range.begin(); r < range.end(); ++r) {
-      int row_off = r * w;
+      const int row_off = r * w;
+      const uint8_t *row_bin = b_ptr + row_off;
+      int *row_labels = l_ptr + row_off;
+
       for (int c = 0; c < w; ++c) {
-        int idx = row_off + c;
-        if (b_ptr[idx] == 0) {
+        if (row_bin[c] == 0) {
           continue;
         }
 
-        int top = (r > range.begin() && b_ptr[idx - w]) ? l_ptr[idx - w] : 0;
-        int left = (c > 0 && b_ptr[idx - 1]) ? l_ptr[idx - 1] : 0;
+        int top = (r > range.begin() && row_bin[c - w]) ? row_labels[c - w] : 0;
+        int left = (c > 0 && row_bin[c - 1]) ? row_labels[c - 1] : 0;
 
-        if (top == 0 && left == 0) {
-          l_ptr[idx] = idx + 1;
-        } else if (top != 0 && left == 0) {
-          l_ptr[idx] = top;
-        } else if (top == 0 && left != 0) {
-          l_ptr[idx] = left;
+        if (top == 0) {
+          if (left == 0) {
+            row_labels[c] = row_off + c + 1;
+          } else {
+            row_labels[c] = left;
+          }
+        } else if (left == 0) {
+          row_labels[c] = top;
         } else {
-          l_ptr[idx] = (top < left) ? top : left;
+          row_labels[c] = (top < left) ? top : left;
           if (top != left) {
             UnionLabels(p_ptr, top, left);
           }
         }
       }
     }
-  });
+  }, tbb::static_partitioner());
 }
 
 void MarinLMarkComponentsTBB::MergeBordersTBB() {
@@ -107,14 +111,14 @@ void MarinLMarkComponentsTBB::MergeBordersTBB() {
   int w = width_;
 
   tbb::parallel_for(1, height_, [&](int r) {
-    int curr_row = r * w;
-    int prev_row = curr_row - w;
+    const int curr_row = r * w;
+    const int prev_row = curr_row - w;
     for (int c = 0; c < w; ++c) {
       if (b_ptr[curr_row + c] && b_ptr[prev_row + c]) {
         UnionLabels(p_ptr, l_ptr[curr_row + c], l_ptr[prev_row + c]);
       }
     }
-  });
+  }, tbb::static_partitioner());
 }
 
 void MarinLMarkComponentsTBB::SecondPassTBB() {
@@ -122,13 +126,13 @@ void MarinLMarkComponentsTBB::SecondPassTBB() {
   int *l_ptr = labels_flat_.data();
   int total = height_ * width_;
 
-  tbb::parallel_for(tbb::blocked_range<int>(0, total, 10000), [&](const tbb::blocked_range<int> &range) {
+  tbb::parallel_for(tbb::blocked_range<int>(0, total, 20000), [&](const tbb::blocked_range<int> &range) {
     for (int i = range.begin(); i < range.end(); ++i) {
       if (l_ptr[i] != 0) {
         l_ptr[i] = FindRoot(p_ptr, l_ptr[i]);
       }
     }
-  });
+  }, tbb::static_partitioner());
 }
 
 bool MarinLMarkComponentsTBB::RunImpl() {
