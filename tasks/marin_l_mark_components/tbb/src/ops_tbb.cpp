@@ -1,34 +1,31 @@
 #include "marin_l_mark_components/tbb/include/ops_tbb.hpp"
 
-#include <tbb/tbb.h>
+#include <oneapi/tbb/blocked_range.h>
+#include <oneapi/tbb/parallel_for.h>
 
 #include <algorithm>
-#include <numeric>
+#include <vector>
 
 namespace marin_l_mark_components {
 
 namespace {
-inline int FindRoot(int *parent, int x) {
-  int root = x;
-  while (parent[root] != root) {
-    root = parent[root];
+
+int Find(std::vector<int> &p, int x) {
+  while (p[x] != x) {
+    p[x] = p[p[x]];
+    x = p[x];
   }
-  return root;
+  return x;
 }
 
-inline void UnionLabels(int *parent, int a, int b) {
-  int root_a = FindRoot(parent, a);
-  int root_b = FindRoot(parent, b);
-  while (root_a != root_b) {
-    if (root_a < root_b) {
-      parent[root_b] = root_a;
-      root_b = FindRoot(parent, root_b);
-    } else {
-      parent[root_a] = root_b;
-      root_a = FindRoot(parent, root_a);
-    }
+void Union(std::vector<int> &p, int a, int b) {
+  int ra = Find(p, a);
+  int rb = Find(p, b);
+  if (ra != rb) {
+    p[rb] = ra;
   }
 }
+
 }  // namespace
 
 MarinLMarkComponentsTBB::MarinLMarkComponentsTBB(const InType &in) {
@@ -41,109 +38,148 @@ bool MarinLMarkComponentsTBB::ValidationImpl() {
   if (img.empty() || img[0].empty()) {
     return false;
   }
+
+  size_t w = img[0].size();
+  for (auto &r : img) {
+    if (r.size() != w) {
+      return false;
+    }
+  }
+
   return true;
 }
 
 bool MarinLMarkComponentsTBB::PreProcessingImpl() {
-  const auto &input = GetInput().binary;
-  height_ = static_cast<int>(input.size());
-  width_ = static_cast<int>(input[0].size());
-  size_t total = static_cast<size_t>(height_) * width_;
+  const auto &in = GetInput().binary;
 
-  binary_flat_.assign(total, 0);
-  labels_flat_.assign(total, 0);
-  parent_.resize(total + 1);
-  std::iota(parent_.begin(), parent_.end(), 0);
+  height_ = (int)in.size();
+  width_ = (int)in[0].size();
 
-  uint8_t *b_ptr = binary_flat_.data();
+  binary_.resize(height_ * width_);
+
   tbb::parallel_for(0, height_, [&](int r) {
-    const auto &row = input[r];
-    for (int c = 0; c < width_; ++c) {
-      b_ptr[r * width_ + c] = static_cast<uint8_t>(row[c]);
+    for (int c = 0; c < width_; c++) {
+      binary_[r * width_ + c] = (uint8_t)in[r][c];
     }
   });
+
   return true;
 }
 
-void MarinLMarkComponentsTBB::FirstPassTBB() {
-  int *p_ptr = parent_.data();
-  int *l_ptr = labels_flat_.data();
-  const uint8_t *b_ptr = binary_flat_.data();
-  int w = width_;
+void MarinLMarkComponentsTBB::BuildRLE() {
+  std::vector<std::vector<Run>> per_row(height_);
 
-  tbb::parallel_for(tbb::blocked_range<int>(0, height_, 128), [&](const tbb::blocked_range<int> &range) {
-    for (int r = range.begin(); r < range.end(); ++r) {
-      int row_off = r * w;
-      for (int c = 0; c < w; ++c) {
-        int idx = row_off + c;
-        if (b_ptr[idx] == 0) {
-          continue;
-        }
+  tbb::parallel_for(0, height_, [&](int r) {
+    int c = 0;
+    while (c < width_) {
+      while (c < width_ && binary_[r * width_ + c] == 0) {
+        c++;
+      }
+      if (c >= width_) {
+        break;
+      }
 
-        int top = (r > range.begin() && b_ptr[idx - w]) ? l_ptr[idx - w] : 0;
-        int left = (c > 0 && b_ptr[idx - 1]) ? l_ptr[idx - 1] : 0;
+      int start = c;
+      while (c < width_ && binary_[r * width_ + c] == 1) {
+        c++;
+      }
 
-        if (top == 0 && left == 0) {
-          l_ptr[idx] = idx + 1;
-        } else if (top != 0 && left == 0) {
-          l_ptr[idx] = top;
-        } else if (top == 0 && left != 0) {
-          l_ptr[idx] = left;
+      per_row[r].push_back({r, start, c - 1, -1});
+    }
+  });
+
+  size_t total_runs = 0;
+  for (const auto &row : per_row) {
+    total_runs += row.size();
+  }
+
+  runs_.clear();
+  runs_.reserve(total_runs);
+
+  row_runs_.clear();
+  row_runs_.resize(height_);
+
+  for (int r = 0; r < height_; r++) {
+    for (auto &run : per_row[r]) {
+      int id = static_cast<int>(runs_.size());
+      run.label = id;
+
+      runs_.push_back(run);
+      row_runs_[r].push_back(id);
+    }
+  }
+
+  parent_.resize(runs_.size());
+  for (size_t i = 0; i < runs_.size(); i++) {
+    parent_[i] = static_cast<int>(i);
+  }
+}
+
+void MarinLMarkComponentsTBB::MergeRuns() {
+  for (int r = 1; r < height_; r++) {
+    const auto &prev = row_runs_[r - 1];
+    const auto &curr = row_runs_[r];
+
+    int i = 0, j = 0;
+
+    while (i < (int)prev.size() && j < (int)curr.size()) {
+      auto &A = runs_[prev[i]];
+      auto &B = runs_[curr[j]];
+
+      if (A.r < B.l) {
+        i++;
+      } else if (B.r < A.l) {
+        j++;
+      } else {
+        Union(parent_, A.label, B.label);
+
+        if (A.r < B.r) {
+          i++;
         } else {
-          l_ptr[idx] = (top < left) ? top : left;
-          if (top != left) {
-            UnionLabels(p_ptr, top, left);
-          }
+          j++;
         }
       }
     }
-  });
+  }
 }
 
-void MarinLMarkComponentsTBB::MergeBordersTBB() {
-  int *p_ptr = parent_.data();
-  int *l_ptr = labels_flat_.data();
-  const uint8_t *b_ptr = binary_flat_.data();
-  int w = width_;
-
-  tbb::parallel_for(1, height_, [&](int r) {
-    int curr_row = r * w;
-    int prev_row = curr_row - w;
-    for (int c = 0; c < w; ++c) {
-      if (b_ptr[curr_row + c] && b_ptr[prev_row + c]) {
-        UnionLabels(p_ptr, l_ptr[curr_row + c], l_ptr[prev_row + c]);
-      }
-    }
-  });
+void MarinLMarkComponentsTBB::Flatten() {
+  for (size_t i = 0; i < parent_.size(); i++) {
+    parent_[i] = Find(parent_, i);
+  }
 }
 
-void MarinLMarkComponentsTBB::SecondPassTBB() {
-  int *p_ptr = parent_.data();
-  int *l_ptr = labels_flat_.data();
-  int total = height_ * width_;
+void MarinLMarkComponentsTBB::ExpandToImage() {
+  labels_flat_.assign(height_ * width_, 0);
 
-  tbb::parallel_for(tbb::blocked_range<int>(0, total, 10000), [&](const tbb::blocked_range<int> &range) {
-    for (int i = range.begin(); i < range.end(); ++i) {
-      if (l_ptr[i] != 0) {
-        l_ptr[i] = FindRoot(p_ptr, l_ptr[i]);
-      }
+  tbb::parallel_for(0, (int)runs_.size(), [&](int i) {
+    auto &run = runs_[i];
+    int label = parent_[run.label];
+
+    for (int c = run.l; c <= run.r; c++) {
+      labels_flat_[run.row * width_ + c] = label + 1;
     }
   });
 }
 
 bool MarinLMarkComponentsTBB::RunImpl() {
-  FirstPassTBB();
-  MergeBordersTBB();
-  SecondPassTBB();
+  BuildRLE();
+  MergeRuns();
+  Flatten();
+  ExpandToImage();
   return true;
 }
 
 bool MarinLMarkComponentsTBB::PostProcessingImpl() {
-  auto &output = GetOutput().labels;
-  output.resize(height_);
-  const int *l_ptr = labels_flat_.data();
+  Labels out(height_, std::vector<int>(width_));
 
-  tbb::parallel_for(0, height_, [&](int r) { output[r].assign(l_ptr + r * width_, l_ptr + (r + 1) * width_); });
+  tbb::parallel_for(0, height_, [&](int r) {
+    for (int c = 0; c < width_; c++) {
+      out[r][c] = labels_flat_[r * width_ + c];
+    }
+  });
+
+  GetOutput().labels = out;
   return true;
 }
 
