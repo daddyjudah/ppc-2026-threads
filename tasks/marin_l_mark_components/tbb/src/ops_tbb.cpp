@@ -52,32 +52,11 @@ StripeRange GetStripeRange(int stripe, int height, int stripe_count, const std::
   };
 }
 
-void AssignPixelLabel(std::vector<int> &labels_flat, std::vector<int> &parent, std::size_t idx, int left_label,
-                      int top_label, int &next_label) {
-  if (left_label == 0) {
-    if (top_label == 0) {
-      parent[static_cast<std::size_t>(next_label)] = next_label;
-      labels_flat[idx] = next_label++;
-      return;
-    }
-    labels_flat[idx] = top_label;
-    return;
-  }
-
-  if (top_label == 0) {
-    labels_flat[idx] = left_label;
-    return;
-  }
-
-  const int min_label = std::min(left_label, top_label);
-  labels_flat[idx] = min_label;
-  if (left_label != top_label) {
-    UnionLabels(parent, left_label, top_label);
-  }
-}
-
 void ProcessStripe(const std::vector<std::uint8_t> &binary, std::vector<int> &labels_flat, std::vector<int> &parent,
                    std::vector<int> &stripe_used_counts, int width, const StripeRange &stripe_range, int stripe) {
+  const std::uint8_t *binary_ptr = binary.data();
+  int *labels_ptr = labels_flat.data();
+  int *parent_ptr = parent.data();
   int next_label = stripe_range.base_label;
 
   for (int row = stripe_range.row_start; row < stripe_range.row_end; ++row) {
@@ -87,13 +66,34 @@ void ProcessStripe(const std::vector<std::uint8_t> &binary, std::vector<int> &la
 
     for (int col = 0; col < width; ++col) {
       const std::size_t idx = row_offset + static_cast<std::size_t>(col);
-      if (binary[idx] == 0U) {
+      if (binary_ptr[idx] == 0U) {
+        labels_ptr[idx] = 0;
         continue;
       }
 
-      const int left_label = (col > 0) ? labels_flat[idx - 1ULL] : 0;
-      const int top_label = has_top ? labels_flat[top_row_offset + static_cast<std::size_t>(col)] : 0;
-      AssignPixelLabel(labels_flat, parent, idx, left_label, top_label, next_label);
+      const int left_label = (col > 0) ? labels_ptr[idx - 1ULL] : 0;
+      const int top_label = has_top ? labels_ptr[top_row_offset + static_cast<std::size_t>(col)] : 0;
+
+      if (left_label == 0) {
+        if (top_label == 0) {
+          parent_ptr[static_cast<std::size_t>(next_label)] = next_label;
+          labels_ptr[idx] = next_label++;
+          continue;
+        }
+        labels_ptr[idx] = top_label;
+        continue;
+      }
+
+      if (top_label == 0) {
+        labels_ptr[idx] = left_label;
+        continue;
+      }
+
+      const int min_label = std::min(left_label, top_label);
+      labels_ptr[idx] = min_label;
+      if (left_label != top_label) {
+        UnionLabels(parent, left_label, top_label);
+      }
     }
   }
 
@@ -170,14 +170,12 @@ bool MarinLMarkComponentsTBB::PreProcessingImpl() {
   std::partial_sum(stripe_offsets_.begin(), stripe_offsets_.end(), stripe_offsets_.begin());
   max_label_id_ = stripe_offsets_[static_cast<std::size_t>(stripe_count_)];
 
-  oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<int>(0, height_),
-                            [&](const oneapi::tbb::blocked_range<int> &range) {
-    for (int row = range.begin(); row < range.end(); ++row) {
-      const std::size_t row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
-      for (int col = 0; col < width_; ++col) {
-        binary_[row_offset + static_cast<std::size_t>(col)] =
-            static_cast<std::uint8_t>(input_binary[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)]);
-      }
+  std::uint8_t *binary_ptr = binary_.data();
+  oneapi::tbb::parallel_for(0, height_, [&](int row) {
+    const std::size_t row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
+    const auto &src_row = input_binary[static_cast<std::size_t>(row)];
+    for (int col = 0; col < width_; ++col) {
+      binary_ptr[row_offset + static_cast<std::size_t>(col)] = static_cast<std::uint8_t>(src_row[col]);
     }
   });
 
@@ -192,19 +190,9 @@ bool MarinLMarkComponentsTBB::RunImpl() {
 }
 
 void MarinLMarkComponentsTBB::FirstPassTBB() {
-  oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<std::size_t>(0, labels_flat_.size()),
-                            [&](const oneapi::tbb::blocked_range<std::size_t> &range) {
-    for (std::size_t i = range.begin(); i < range.end(); ++i) {
-      labels_flat_[i] = 0;
-    }
-  });
-
-  oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<int>(0, stripe_count_),
-                            [&](const oneapi::tbb::blocked_range<int> &range) {
-    for (int stripe = range.begin(); stripe < range.end(); ++stripe) {
-      const StripeRange stripe_range = GetStripeRange(stripe, height_, stripe_count_, stripe_offsets_);
-      ProcessStripe(binary_, labels_flat_, parent_, stripe_used_counts_, width_, stripe_range, stripe);
-    }
+  oneapi::tbb::parallel_for(0, stripe_count_, [&](int stripe) {
+    const StripeRange stripe_range = GetStripeRange(stripe, height_, stripe_count_, stripe_offsets_);
+    ProcessStripe(binary_, labels_flat_, parent_, stripe_used_counts_, width_, stripe_range, stripe);
   });
 }
 
@@ -227,14 +215,11 @@ void MarinLMarkComponentsTBB::MergeStripeBorders() {
     }
   }
 
-  oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<int>(0, stripe_count_),
-                            [&](const oneapi::tbb::blocked_range<int> &range) {
-    for (int stripe = range.begin(); stripe < range.end(); ++stripe) {
-      const int base_label = 1 + stripe_offsets_[static_cast<std::size_t>(stripe)];
-      const int used_count = stripe_used_counts_[static_cast<std::size_t>(stripe)];
-      for (int label = base_label; label < base_label + used_count; ++label) {
-        parent_[static_cast<std::size_t>(label)] = FindRoot(parent_, label);
-      }
+  oneapi::tbb::parallel_for(0, stripe_count_, [&](int stripe) {
+    const int base_label = 1 + stripe_offsets_[static_cast<std::size_t>(stripe)];
+    const int used_count = stripe_used_counts_[static_cast<std::size_t>(stripe)];
+    for (int label = base_label; label < base_label + used_count; ++label) {
+      parent_[static_cast<std::size_t>(label)] = FindRoot(parent_, label);
     }
   });
 }
@@ -262,17 +247,19 @@ void MarinLMarkComponentsTBB::SecondPassTBB() {
     }
   }
 
-  oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<std::size_t>(0, labels_flat_.size()),
-                            [&](const oneapi::tbb::blocked_range<std::size_t> &range) {
-    for (std::size_t idx = range.begin(); idx < range.end(); ++idx) {
-      const int label = labels_flat_[idx];
-      if (label == 0) {
-        continue;
-      }
+  int *labels_ptr = labels_flat_.data();
+  const int *parent_ptr = parent_.data();
+  const int *compact_ptr = root_to_compact_.data();
+  const int64_t pixels_count = static_cast<int64_t>(labels_flat_.size());
 
-      const int root = parent_[static_cast<std::size_t>(label)];
-      labels_flat_[idx] = root_to_compact_[static_cast<std::size_t>(root)];
+  oneapi::tbb::parallel_for(int64_t{0}, pixels_count, [&](int64_t idx) {
+    const int label = labels_ptr[static_cast<std::size_t>(idx)];
+    if (label == 0) {
+      return;
     }
+
+    const int root = parent_ptr[static_cast<std::size_t>(label)];
+    labels_ptr[static_cast<std::size_t>(idx)] = compact_ptr[static_cast<std::size_t>(root)];
   });
 }
 
@@ -280,14 +267,12 @@ bool MarinLMarkComponentsTBB::PostProcessingImpl() {
   OutType out;
   out.labels = Labels(static_cast<std::size_t>(height_), std::vector<int>(static_cast<std::size_t>(width_), 0));
 
-  oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<int>(0, height_),
-                            [&](const oneapi::tbb::blocked_range<int> &range) {
-    for (int row = range.begin(); row < range.end(); ++row) {
-      const std::size_t row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
-      for (int col = 0; col < width_; ++col) {
-        out.labels[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)] =
-            labels_flat_[row_offset + static_cast<std::size_t>(col)];
-      }
+  const int *labels_ptr = labels_flat_.data();
+  oneapi::tbb::parallel_for(0, height_, [&](int row) {
+    const std::size_t row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
+    auto &out_row = out.labels[static_cast<std::size_t>(row)];
+    for (int col = 0; col < width_; ++col) {
+      out_row[static_cast<std::size_t>(col)] = labels_ptr[row_offset + static_cast<std::size_t>(col)];
     }
   });
 
