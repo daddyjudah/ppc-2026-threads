@@ -36,7 +36,8 @@ class MarinLMarkComponentsTBB : public BaseTask {
   std::vector<Run> runs_;
   std::vector<int> parent_;
   std::vector<int> labels_flat_;
-  std::vector<std::vector<int>> row_runs_;
+  std::vector<int> rank_;
+  std::vector<int> offsets_;
 
   int height_ = 0;
   int width_ = 0;

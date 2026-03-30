@@ -1,6 +1,7 @@
 #include "marin_l_mark_components/tbb/include/ops_tbb.hpp"
 
 #include <oneapi/tbb/blocked_range.h>
+#include <oneapi/tbb/enumerable_thread_specific.h>
 #include <oneapi/tbb/parallel_for.h>
 
 #include <algorithm>
@@ -11,18 +12,27 @@ namespace marin_l_mark_components {
 namespace {
 
 int Find(std::vector<int> &p, int x) {
-  while (p[x] != x) {
-    p[x] = p[p[x]];
-    x = p[x];
+  if (p[x] != x) {
+    p[x] = Find(p, p[x]);
   }
-  return x;
+  return p[x];
 }
 
-void Union(std::vector<int> &p, int a, int b) {
+void Union(std::vector<int> &p, std::vector<int> &rank, int a, int b) {
   int ra = Find(p, a);
   int rb = Find(p, b);
-  if (ra != rb) {
+
+  if (ra == rb) {
+    return;
+  }
+
+  if (rank[ra] < rank[rb]) {
+    p[ra] = rb;
+  } else if (rank[ra] > rank[rb]) {
     p[rb] = ra;
+  } else {
+    p[rb] = ra;
+    rank[ra]++;
   }
 }
 
@@ -57,9 +67,11 @@ bool MarinLMarkComponentsTBB::PreProcessingImpl() {
 
   binary_.resize(height_ * width_);
 
-  tbb::parallel_for(0, height_, [&](int r) {
-    for (int c = 0; c < width_; c++) {
-      binary_[r * width_ + c] = (uint8_t)in[r][c];
+  tbb::parallel_for(tbb::blocked_range<int>(0, height_), [&](const tbb::blocked_range<int> &range) {
+    for (int r = range.begin(); r < range.end(); ++r) {
+      for (int c = 0; c < width_; c++) {
+        binary_[r * width_ + c] = (uint8_t)in[r][c];
+      }
     }
   });
 
@@ -67,71 +79,95 @@ bool MarinLMarkComponentsTBB::PreProcessingImpl() {
 }
 
 void MarinLMarkComponentsTBB::BuildRLE() {
-  std::vector<std::vector<Run>> per_row(height_);
+  std::vector<int> row_counts(height_, 0);
 
-  tbb::parallel_for(0, height_, [&](int r) {
-    int c = 0;
-    while (c < width_) {
-      while (c < width_ && binary_[r * width_ + c] == 0) {
-        c++;
-      }
-      if (c >= width_) {
-        break;
+  tbb::parallel_for(tbb::blocked_range<int>(0, height_), [&](const tbb::blocked_range<int> &range) {
+    for (int r = range.begin(); r < range.end(); ++r) {
+      int c = 0, count = 0;
+
+      while (c < width_) {
+        while (c < width_ && binary_[r * width_ + c] == 0) {
+          c++;
+        }
+        if (c >= width_) {
+          break;
+        }
+
+        while (c < width_ && binary_[r * width_ + c] == 1) {
+          c++;
+        }
+        count++;
       }
 
-      int start = c;
-      while (c < width_ && binary_[r * width_ + c] == 1) {
-        c++;
-      }
-
-      per_row[r].push_back({r, start, c - 1, -1});
+      row_counts[r] = count;
     }
   });
 
-  size_t total_runs = 0;
-  for (const auto &row : per_row) {
-    total_runs += row.size();
+  offsets_.assign(height_ + 1, 0);
+  for (int i = 0; i < height_; i++) {
+    offsets_[i + 1] = offsets_[i] + row_counts[i];
   }
 
-  runs_.clear();
-  runs_.reserve(total_runs);
+  int total_runs = offsets_[height_];
 
-  row_runs_.clear();
-  row_runs_.resize(height_);
+  runs_.resize(total_runs);
+  parent_.resize(total_runs);
+  rank_.assign(total_runs, 0);
 
-  for (int r = 0; r < height_; r++) {
-    for (auto &run : per_row[r]) {
-      int id = static_cast<int>(runs_.size());
-      run.label = id;
+  tbb::parallel_for(tbb::blocked_range<int>(0, height_), [&](const tbb::blocked_range<int> &range) {
+    for (int r = range.begin(); r < range.end(); ++r) {
+      int c = 0;
+      int idx = offsets_[r];
 
-      runs_.push_back(run);
-      row_runs_[r].push_back(id);
+      while (c < width_) {
+        while (c < width_ && binary_[r * width_ + c] == 0) {
+          c++;
+        }
+        if (c >= width_) {
+          break;
+        }
+
+        int start = c;
+        while (c < width_ && binary_[r * width_ + c] == 1) {
+          c++;
+        }
+
+        runs_[idx] = {r, start, c - 1, idx};
+        idx++;
+      }
     }
-  }
+  });
 
-  parent_.resize(runs_.size());
-  for (size_t i = 0; i < runs_.size(); i++) {
-    parent_[i] = static_cast<int>(i);
-  }
+  tbb::parallel_for(0, total_runs, [&](int i) { parent_[i] = i; });
 }
 
 void MarinLMarkComponentsTBB::MergeRuns() {
-  for (int r = 1; r < height_; r++) {
-    const auto &prev = row_runs_[r - 1];
-    const auto &curr = row_runs_[r];
+  std::vector<std::pair<int, int>> edges;
 
-    int i = 0, j = 0;
+  tbb::enumerable_thread_specific<std::vector<std::pair<int, int>>> local_edges;
 
-    while (i < (int)prev.size() && j < (int)curr.size()) {
-      auto &A = runs_[prev[i]];
-      auto &B = runs_[curr[j]];
+  tbb::parallel_for(1, height_, [&](int r) {
+    auto &local = local_edges.local();
+
+    int prev_begin = offsets_[r - 1];
+    int prev_end = offsets_[r];
+
+    int curr_begin = offsets_[r];
+    int curr_end = offsets_[r + 1];
+
+    int i = prev_begin;
+    int j = curr_begin;
+
+    while (i < prev_end && j < curr_end) {
+      const Run &A = runs_[i];
+      const Run &B = runs_[j];
 
       if (A.r < B.l) {
         i++;
       } else if (B.r < A.l) {
         j++;
       } else {
-        Union(parent_, A.label, B.label);
+        local.emplace_back(A.label, B.label);
 
         if (A.r < B.r) {
           i++;
@@ -140,24 +176,39 @@ void MarinLMarkComponentsTBB::MergeRuns() {
         }
       }
     }
+  });
+
+  for (auto &vec : local_edges) {
+    edges.insert(edges.end(), vec.begin(), vec.end());
+  }
+
+  for (const auto &[a, b] : edges) {
+    Union(parent_, rank_, a, b);
   }
 }
 
 void MarinLMarkComponentsTBB::Flatten() {
-  for (size_t i = 0; i < parent_.size(); i++) {
-    parent_[i] = Find(parent_, i);
-  }
+  auto &parent = parent_;
+
+  tbb::parallel_for(0, (int)parent.size(), [&](int i) { parent[i] = Find(parent, i); });
 }
 
 void MarinLMarkComponentsTBB::ExpandToImage() {
   labels_flat_.assign(height_ * width_, 0);
 
-  tbb::parallel_for(0, (int)runs_.size(), [&](int i) {
-    auto &run = runs_[i];
-    int label = parent_[run.label];
+  auto &runs = runs_;
+  auto &parent = parent_;
+  auto &labels = labels_flat_;
 
-    for (int c = run.l; c <= run.r; c++) {
-      labels_flat_[run.row * width_ + c] = label + 1;
+  tbb::parallel_for(tbb::blocked_range<int>(0, (int)runs.size()), [&](const tbb::blocked_range<int> &range) {
+    for (int i = range.begin(); i < range.end(); ++i) {
+      const Run &run = runs[i];
+      int label = parent[run.label] + 1;
+
+      int base = run.row * width_;
+      for (int c = run.l; c <= run.r; c++) {
+        labels[base + c] = label;
+      }
     }
   });
 }
