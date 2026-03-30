@@ -1,5 +1,7 @@
 #pragma once
 
+#include <oneapi/tbb/spin_mutex.h>
+
 #include <vector>
 
 #include "marin_l_mark_components/common/include/common.hpp"
@@ -38,6 +40,7 @@ class MarinLMarkComponentsTBB : public BaseTask {
   std::vector<int> labels_flat_;
   std::vector<int> rank_;
   std::vector<int> offsets_;
+  std::vector<tbb::spin_mutex> locks_;
 
   int height_ = 0;
   int width_ = 0;

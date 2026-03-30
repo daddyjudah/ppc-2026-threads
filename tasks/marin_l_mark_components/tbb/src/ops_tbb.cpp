@@ -1,8 +1,8 @@
 #include "marin_l_mark_components/tbb/include/ops_tbb.hpp"
 
 #include <oneapi/tbb/blocked_range.h>
-#include <oneapi/tbb/enumerable_thread_specific.h>
 #include <oneapi/tbb/parallel_for.h>
+#include <oneapi/tbb/spin_mutex.h>
 
 #include <algorithm>
 #include <vector>
@@ -12,27 +12,23 @@ namespace marin_l_mark_components {
 namespace {
 
 int Find(std::vector<int> &p, int x) {
-  if (p[x] != x) {
-    p[x] = Find(p, p[x]);
+  while (p[x] != x) {
+    p[x] = p[p[x]];
+    x = p[x];
   }
-  return p[x];
+  return x;
 }
 
-void Union(std::vector<int> &p, std::vector<int> &rank, int a, int b) {
+void Union(std::vector<int> &p, int a, int b) {
   int ra = Find(p, a);
   int rb = Find(p, b);
 
-  if (ra == rb) {
-    return;
-  }
-
-  if (rank[ra] < rank[rb]) {
-    p[ra] = rb;
-  } else if (rank[ra] > rank[rb]) {
-    p[rb] = ra;
-  } else {
-    p[rb] = ra;
-    rank[ra]++;
+  if (ra != rb) {
+    if (ra < rb) {
+      p[rb] = ra;
+    } else {
+      p[ra] = rb;
+    }
   }
 }
 
@@ -55,7 +51,6 @@ bool MarinLMarkComponentsTBB::ValidationImpl() {
       return false;
     }
   }
-
   return true;
 }
 
@@ -69,8 +64,9 @@ bool MarinLMarkComponentsTBB::PreProcessingImpl() {
 
   tbb::parallel_for(tbb::blocked_range<int>(0, height_), [&](const tbb::blocked_range<int> &range) {
     for (int r = range.begin(); r < range.end(); ++r) {
+      int base = r * width_;
       for (int c = 0; c < width_; c++) {
-        binary_[r * width_ + c] = (uint8_t)in[r][c];
+        binary_[base + c] = (uint8_t)in[r][c];
       }
     }
   });
@@ -84,16 +80,17 @@ void MarinLMarkComponentsTBB::BuildRLE() {
   tbb::parallel_for(tbb::blocked_range<int>(0, height_), [&](const tbb::blocked_range<int> &range) {
     for (int r = range.begin(); r < range.end(); ++r) {
       int c = 0, count = 0;
+      int base = r * width_;
 
       while (c < width_) {
-        while (c < width_ && binary_[r * width_ + c] == 0) {
+        while (c < width_ && binary_[base + c] == 0) {
           c++;
         }
         if (c >= width_) {
           break;
         }
 
-        while (c < width_ && binary_[r * width_ + c] == 1) {
+        while (c < width_ && binary_[base + c] == 1) {
           c++;
         }
         count++;
@@ -112,15 +109,16 @@ void MarinLMarkComponentsTBB::BuildRLE() {
 
   runs_.resize(total_runs);
   parent_.resize(total_runs);
-  rank_.assign(total_runs, 0);
+  locks_.resize(total_runs);
 
   tbb::parallel_for(tbb::blocked_range<int>(0, height_), [&](const tbb::blocked_range<int> &range) {
     for (int r = range.begin(); r < range.end(); ++r) {
       int c = 0;
       int idx = offsets_[r];
+      int base = r * width_;
 
       while (c < width_) {
-        while (c < width_ && binary_[r * width_ + c] == 0) {
+        while (c < width_ && binary_[base + c] == 0) {
           c++;
         }
         if (c >= width_) {
@@ -128,7 +126,7 @@ void MarinLMarkComponentsTBB::BuildRLE() {
         }
 
         int start = c;
-        while (c < width_ && binary_[r * width_ + c] == 1) {
+        while (c < width_ && binary_[base + c] == 1) {
           c++;
         }
 
@@ -142,13 +140,7 @@ void MarinLMarkComponentsTBB::BuildRLE() {
 }
 
 void MarinLMarkComponentsTBB::MergeRuns() {
-  std::vector<std::pair<int, int>> edges;
-
-  tbb::enumerable_thread_specific<std::vector<std::pair<int, int>>> local_edges;
-
   tbb::parallel_for(1, height_, [&](int r) {
-    auto &local = local_edges.local();
-
     int prev_begin = offsets_[r - 1];
     int prev_end = offsets_[r];
 
@@ -167,7 +159,14 @@ void MarinLMarkComponentsTBB::MergeRuns() {
       } else if (B.r < A.l) {
         j++;
       } else {
-        local.emplace_back(A.label, B.label);
+        int a = A.label;
+        int b = B.label;
+
+        if (a != b) {
+          int lock_id = std::min(a, b);
+          tbb::spin_mutex::scoped_lock lock(locks_[lock_id]);
+          Union(parent_, a, b);
+        }
 
         if (A.r < B.r) {
           i++;
@@ -177,37 +176,21 @@ void MarinLMarkComponentsTBB::MergeRuns() {
       }
     }
   });
-
-  for (auto &vec : local_edges) {
-    edges.insert(edges.end(), vec.begin(), vec.end());
-  }
-
-  for (const auto &[a, b] : edges) {
-    Union(parent_, rank_, a, b);
-  }
-}
-
-void MarinLMarkComponentsTBB::Flatten() {
-  auto &parent = parent_;
-
-  tbb::parallel_for(0, (int)parent.size(), [&](int i) { parent[i] = Find(parent, i); });
 }
 
 void MarinLMarkComponentsTBB::ExpandToImage() {
   labels_flat_.assign(height_ * width_, 0);
 
-  auto &runs = runs_;
-  auto &parent = parent_;
-  auto &labels = labels_flat_;
-
-  tbb::parallel_for(tbb::blocked_range<int>(0, (int)runs.size()), [&](const tbb::blocked_range<int> &range) {
+  tbb::parallel_for(tbb::blocked_range<int>(0, (int)runs_.size()), [&](const tbb::blocked_range<int> &range) {
     for (int i = range.begin(); i < range.end(); ++i) {
-      const Run &run = runs[i];
-      int label = parent[run.label] + 1;
+      const Run &run = runs_[i];
+
+      int root = Find(parent_, run.label);
+      int label = root + 1;
 
       int base = run.row * width_;
       for (int c = run.l; c <= run.r; c++) {
-        labels[base + c] = label;
+        labels_flat_[base + c] = label;
       }
     }
   });
@@ -216,7 +199,6 @@ void MarinLMarkComponentsTBB::ExpandToImage() {
 bool MarinLMarkComponentsTBB::RunImpl() {
   BuildRLE();
   MergeRuns();
-  Flatten();
   ExpandToImage();
   return true;
 }
@@ -225,8 +207,9 @@ bool MarinLMarkComponentsTBB::PostProcessingImpl() {
   Labels out(height_, std::vector<int>(width_));
 
   tbb::parallel_for(0, height_, [&](int r) {
+    int base = r * width_;
     for (int c = 0; c < width_; c++) {
-      out[r][c] = labels_flat_[r * width_ + c];
+      out[r][c] = labels_flat_[base + c];
     }
   });
 
