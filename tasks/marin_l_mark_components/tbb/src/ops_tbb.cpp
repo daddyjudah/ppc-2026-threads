@@ -105,6 +105,9 @@ void MarinLMarkComponentsTBB::BuildRLE() {
   runs_.resize(total_runs);
   parent_.resize(total_runs);
   locks_.resize(total_runs);
+  for (int i = 0; i < total_runs; i++) {
+    locks_[i] = std::make_unique<tbb::spin_mutex>();
+  }
 
   tbb::parallel_for(tbb::blocked_range<int>(0, height_), [&](const tbb::blocked_range<int> &range) {
     for (int r = range.begin(); r < range.end(); ++r) {
@@ -157,7 +160,12 @@ void MarinLMarkComponentsTBB::MergeRuns() {
         int b = B.label;
 
         if (a != b) {
-          tbb::spin_mutex::scoped_lock lock(locks_[std::min(a, b)]);
+          int x = std::min(a, b);
+          int y = std::max(a, b);
+
+          tbb::spin_mutex::scoped_lock lock1(*locks_[x]);
+          tbb::spin_mutex::scoped_lock lock2(*locks_[y]);
+
           Union(parent_, a, b);
         }
 

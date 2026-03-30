@@ -40,7 +40,7 @@ class MarinLMarkComponentsTBB : public BaseTask {
   std::vector<int> labels_flat_;
   std::vector<int> rank_;
   std::vector<int> offsets_;
-  std::vector<tbb::spin_mutex> locks_;
+  std::vector<std::unique_ptr<tbb::spin_mutex>> locks_;
 
   int height_ = 0;
   int width_ = 0;
