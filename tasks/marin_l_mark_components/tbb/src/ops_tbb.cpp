@@ -2,7 +2,6 @@
 
 #include <oneapi/tbb/blocked_range.h>
 #include <oneapi/tbb/parallel_for.h>
-#include <oneapi/tbb/task_arena.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -15,11 +14,14 @@ namespace marin_l_mark_components {
 namespace {
 
 constexpr std::uint64_t kMaxPixels = 100000000ULL;
-constexpr int kMinRowsPerStripe = 64;
+constexpr int kTileHeight = 128;
+constexpr int kTileWidth = 128;
 
-struct StripeRange {
-  int row_start;
+struct TileBounds {
+  int row_begin;
   int row_end;
+  int col_begin;
+  int col_end;
   int base_label;
 };
 
@@ -44,35 +46,49 @@ void UnionLabels(std::vector<int> &parent, int a, int b) {
   }
 }
 
-StripeRange GetStripeRange(int stripe, int height, int stripe_count, const std::vector<int> &stripe_offsets) {
+int GetTileIndex(int tile_row, int tile_col, int tile_cols) {
+  return (tile_row * tile_cols) + tile_col;
+}
+
+TileBounds GetTileBounds(int tile_index, int tile_cols, int height, int width, const std::vector<int> &tile_offsets) {
+  const int tile_row = tile_index / tile_cols;
+  const int tile_col = tile_index % tile_cols;
+
+  const int row_begin = tile_row * kTileHeight;
+  const int row_end = std::min(row_begin + kTileHeight, height);
+  const int col_begin = tile_col * kTileWidth;
+  const int col_end = std::min(col_begin + kTileWidth, width);
+
   return {
-      .row_start = (stripe * height) / stripe_count,
-      .row_end = ((stripe + 1) * height) / stripe_count,
-      .base_label = 1 + stripe_offsets[static_cast<std::size_t>(stripe)],
+      .row_begin = row_begin,
+      .row_end = row_end,
+      .col_begin = col_begin,
+      .col_end = col_end,
+      .base_label = 1 + tile_offsets[static_cast<std::size_t>(tile_index)],
   };
 }
 
-void ProcessStripe(const std::vector<std::uint8_t> &binary, std::vector<int> &labels_flat, std::vector<int> &parent,
-                   std::vector<int> &stripe_used_counts, int width, const StripeRange &stripe_range, int stripe) {
+void ProcessTile(const std::vector<std::uint8_t> &binary, std::vector<int> &labels_flat, std::vector<int> &parent,
+                 std::vector<int> &tile_used_counts, int width, const TileBounds &tile, int tile_index) {
   const std::uint8_t *binary_ptr = binary.data();
   int *labels_ptr = labels_flat.data();
   int *parent_ptr = parent.data();
-  int next_label = stripe_range.base_label;
+  int next_label = tile.base_label;
 
-  for (int row = stripe_range.row_start; row < stripe_range.row_end; ++row) {
+  for (int row = tile.row_begin; row < tile.row_end; ++row) {
     const std::size_t row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width);
-    const bool has_top = row > stripe_range.row_start;
-    const std::size_t top_row_offset = has_top ? row_offset - static_cast<std::size_t>(width) : 0;
+    const bool has_top_inside_tile = row > tile.row_begin;
+    const std::size_t top_row_offset = has_top_inside_tile ? row_offset - static_cast<std::size_t>(width) : 0;
 
-    for (int col = 0; col < width; ++col) {
+    for (int col = tile.col_begin; col < tile.col_end; ++col) {
       const std::size_t idx = row_offset + static_cast<std::size_t>(col);
       if (binary_ptr[idx] == 0U) {
         labels_ptr[idx] = 0;
         continue;
       }
 
-      const int left_label = (col > 0) ? labels_ptr[idx - 1ULL] : 0;
-      const int top_label = has_top ? labels_ptr[top_row_offset + static_cast<std::size_t>(col)] : 0;
+      const int left_label = (col > tile.col_begin) ? labels_ptr[idx - 1ULL] : 0;
+      const int top_label = has_top_inside_tile ? labels_ptr[top_row_offset + static_cast<std::size_t>(col)] : 0;
 
       if (left_label == 0) {
         if (top_label == 0) {
@@ -97,7 +113,7 @@ void ProcessStripe(const std::vector<std::uint8_t> &binary, std::vector<int> &la
     }
   }
 
-  stripe_used_counts[static_cast<std::size_t>(stripe)] = next_label - stripe_range.base_label;
+  tile_used_counts[static_cast<std::size_t>(tile_index)] = next_label - tile.base_label;
 }
 
 }  // namespace
@@ -153,29 +169,34 @@ bool MarinLMarkComponentsTBB::PreProcessingImpl() {
   parent_.assign(static_cast<std::size_t>(pixels) + 1ULL, 0);
   root_to_compact_.assign(static_cast<std::size_t>(pixels) + 1ULL, 0);
   root_generation_.assign(static_cast<std::size_t>(pixels) + 1ULL, 0);
-  max_label_id_ = 0;
   generation_id_ = 1;
+  max_label_id_ = 0;
 
-  stripe_count_ = std::max(1, oneapi::tbb::this_task_arena::max_concurrency());
-  stripe_count_ = std::min(stripe_count_, height_);
-  stripe_count_ = std::min(stripe_count_, std::max(1, height_ / kMinRowsPerStripe));
-  stripe_offsets_.assign(static_cast<std::size_t>(stripe_count_) + 1ULL, 0);
-  stripe_used_counts_.assign(static_cast<std::size_t>(stripe_count_), 0);
+  tile_rows_ = (height_ + kTileHeight - 1) / kTileHeight;
+  tile_cols_ = (width_ + kTileWidth - 1) / kTileWidth;
+  tile_count_ = tile_rows_ * tile_cols_;
+  tile_offsets_.assign(static_cast<std::size_t>(tile_count_) + 1ULL, 0);
+  tile_used_counts_.assign(static_cast<std::size_t>(tile_count_), 0);
 
-  for (int stripe = 0; stripe < stripe_count_; ++stripe) {
-    const int row_start = (stripe * height_) / stripe_count_;
-    const int row_end = ((stripe + 1) * height_) / stripe_count_;
-    stripe_offsets_[static_cast<std::size_t>(stripe) + 1ULL] = (row_end - row_start) * width_;
+  for (int tile_row = 0; tile_row < tile_rows_; ++tile_row) {
+    const int row_begin = tile_row * kTileHeight;
+    const int row_end = std::min(row_begin + kTileHeight, height_);
+    for (int tile_col = 0; tile_col < tile_cols_; ++tile_col) {
+      const int col_begin = tile_col * kTileWidth;
+      const int col_end = std::min(col_begin + kTileWidth, width_);
+      const int tile_index = GetTileIndex(tile_row, tile_col, tile_cols_);
+      tile_offsets_[static_cast<std::size_t>(tile_index) + 1ULL] = (row_end - row_begin) * (col_end - col_begin);
+    }
   }
-  std::partial_sum(stripe_offsets_.begin(), stripe_offsets_.end(), stripe_offsets_.begin());
-  max_label_id_ = stripe_offsets_[static_cast<std::size_t>(stripe_count_)];
+  std::partial_sum(tile_offsets_.begin(), tile_offsets_.end(), tile_offsets_.begin());
+  max_label_id_ = tile_offsets_[static_cast<std::size_t>(tile_count_)];
 
   std::uint8_t *binary_ptr = binary_.data();
   oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<int>(0, height_, 32),
                             [&](const oneapi::tbb::blocked_range<int> &range) {
     for (int row = range.begin(); row < range.end(); ++row) {
-      const std::size_t row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
       const auto &src_row = input_binary[static_cast<std::size_t>(row)];
+      const std::size_t row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
       for (int col = 0; col < width_; ++col) {
         binary_ptr[row_offset + static_cast<std::size_t>(col)] = static_cast<std::uint8_t>(src_row[col]);
       }
@@ -186,46 +207,71 @@ bool MarinLMarkComponentsTBB::PreProcessingImpl() {
 }
 
 bool MarinLMarkComponentsTBB::RunImpl() {
-  FirstPassTBB();
-  MergeStripeBorders();
-  SecondPassTBB();
+  FirstPassTiles();
+  MergeTileBorders();
+  SecondPassTiles();
   return true;
 }
 
-void MarinLMarkComponentsTBB::FirstPassTBB() {
-  oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<int>(0, stripe_count_, 1),
+void MarinLMarkComponentsTBB::FirstPassTiles() {
+  oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<int>(0, tile_count_, 1),
                             [&](const oneapi::tbb::blocked_range<int> &range) {
-    for (int stripe = range.begin(); stripe < range.end(); ++stripe) {
-      const StripeRange stripe_range = GetStripeRange(stripe, height_, stripe_count_, stripe_offsets_);
-      ProcessStripe(binary_, labels_flat_, parent_, stripe_used_counts_, width_, stripe_range, stripe);
+    for (int tile_index = range.begin(); tile_index < range.end(); ++tile_index) {
+      const TileBounds tile = GetTileBounds(tile_index, tile_cols_, height_, width_, tile_offsets_);
+      ProcessTile(binary_, labels_flat_, parent_, tile_used_counts_, width_, tile, tile_index);
     }
   });
 }
 
-void MarinLMarkComponentsTBB::MergeStripeBorders() {
-  for (int stripe = 0; stripe < stripe_count_ - 1; ++stripe) {
-    const int border_row = ((stripe + 1) * height_) / stripe_count_;
-    const std::size_t top_row_offset = static_cast<std::size_t>(border_row - 1) * static_cast<std::size_t>(width_);
-    const std::size_t bottom_row_offset = static_cast<std::size_t>(border_row) * static_cast<std::size_t>(width_);
+void MarinLMarkComponentsTBB::MergeTileBorders() {
+  for (int tile_row = 0; tile_row < tile_rows_; ++tile_row) {
+    for (int tile_col = 0; tile_col + 1 < tile_cols_; ++tile_col) {
+      const int left_tile_index = GetTileIndex(tile_row, tile_col, tile_cols_);
+      const TileBounds left_tile = GetTileBounds(left_tile_index, tile_cols_, height_, width_, tile_offsets_);
+      const int border_col = left_tile.col_end;
 
-    for (int col = 0; col < width_; ++col) {
-      const std::size_t top_idx = top_row_offset + static_cast<std::size_t>(col);
-      const std::size_t bottom_idx = bottom_row_offset + static_cast<std::size_t>(col);
-      if ((binary_[top_idx] != 0U) && (binary_[bottom_idx] != 0U)) {
-        const int top_label = labels_flat_[top_idx];
-        const int bottom_label = labels_flat_[bottom_idx];
-        if (top_label > 0 && bottom_label > 0 && top_label != bottom_label) {
-          UnionLabels(parent_, top_label, bottom_label);
+      for (int row = left_tile.row_begin; row < left_tile.row_end; ++row) {
+        const std::size_t row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
+        const std::size_t left_idx = row_offset + static_cast<std::size_t>(border_col - 1);
+        const std::size_t right_idx = row_offset + static_cast<std::size_t>(border_col);
+        if ((binary_[left_idx] != 0U) && (binary_[right_idx] != 0U)) {
+          const int left_label = labels_flat_[left_idx];
+          const int right_label = labels_flat_[right_idx];
+          if (left_label > 0 && right_label > 0 && left_label != right_label) {
+            UnionLabels(parent_, left_label, right_label);
+          }
         }
       }
     }
   }
 
-  oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<int>(0, stripe_count_, 1),
+  for (int tile_row = 0; tile_row + 1 < tile_rows_; ++tile_row) {
+    for (int tile_col = 0; tile_col < tile_cols_; ++tile_col) {
+      const int top_tile_index = GetTileIndex(tile_row, tile_col, tile_cols_);
+      const TileBounds top_tile = GetTileBounds(top_tile_index, tile_cols_, height_, width_, tile_offsets_);
+      const int border_row = top_tile.row_end;
+
+      for (int col = top_tile.col_begin; col < top_tile.col_end; ++col) {
+        const std::size_t top_idx =
+            static_cast<std::size_t>(border_row - 1) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(col);
+        const std::size_t bottom_idx =
+            static_cast<std::size_t>(border_row) * static_cast<std::size_t>(width_) + static_cast<std::size_t>(col);
+        if ((binary_[top_idx] != 0U) && (binary_[bottom_idx] != 0U)) {
+          const int top_label = labels_flat_[top_idx];
+          const int bottom_label = labels_flat_[bottom_idx];
+          if (top_label > 0 && bottom_label > 0 && top_label != bottom_label) {
+            UnionLabels(parent_, top_label, bottom_label);
+          }
+        }
+      }
+    }
+  }
+
+  oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<int>(0, tile_count_, 1),
                             [&](const oneapi::tbb::blocked_range<int> &range) {
-    for (int stripe = range.begin(); stripe < range.end(); ++stripe) {
-      const int base_label = 1 + stripe_offsets_[static_cast<std::size_t>(stripe)];
-      const int used_count = stripe_used_counts_[static_cast<std::size_t>(stripe)];
+    for (int tile_index = range.begin(); tile_index < range.end(); ++tile_index) {
+      const int base_label = 1 + tile_offsets_[static_cast<std::size_t>(tile_index)];
+      const int used_count = tile_used_counts_[static_cast<std::size_t>(tile_index)];
       for (int label = base_label; label < base_label + used_count; ++label) {
         parent_[static_cast<std::size_t>(label)] = FindRoot(parent_, label);
       }
@@ -233,10 +279,11 @@ void MarinLMarkComponentsTBB::MergeStripeBorders() {
   });
 }
 
-void MarinLMarkComponentsTBB::SecondPassTBB() {
-  if (height_ == 0 || width_ == 0 || max_label_id_ == 0) {
+void MarinLMarkComponentsTBB::SecondPassTiles() {
+  if (max_label_id_ == 0) {
     return;
   }
+
   ++generation_id_;
   if (generation_id_ == 0) {
     generation_id_ = 1;
@@ -244,9 +291,9 @@ void MarinLMarkComponentsTBB::SecondPassTBB() {
   }
 
   int next_id = 1;
-  for (int stripe = 0; stripe < stripe_count_; ++stripe) {
-    const int base_label = 1 + stripe_offsets_[static_cast<std::size_t>(stripe)];
-    const int used_count = stripe_used_counts_[static_cast<std::size_t>(stripe)];
+  for (int tile_index = 0; tile_index < tile_count_; ++tile_index) {
+    const int base_label = 1 + tile_offsets_[static_cast<std::size_t>(tile_index)];
+    const int used_count = tile_used_counts_[static_cast<std::size_t>(tile_index)];
     for (int label = base_label; label < base_label + used_count; ++label) {
       const int root = parent_[static_cast<std::size_t>(label)];
       if (root_generation_[static_cast<std::size_t>(root)] != generation_id_) {
@@ -268,7 +315,6 @@ void MarinLMarkComponentsTBB::SecondPassTBB() {
       if (label == 0) {
         continue;
       }
-
       const int root = parent_ptr[static_cast<std::size_t>(label)];
       labels_ptr[static_cast<std::size_t>(idx)] = compact_ptr[static_cast<std::size_t>(root)];
     }

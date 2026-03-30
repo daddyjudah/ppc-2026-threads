@@ -24,21 +24,23 @@ class MarinLMarkComponentsTBB : public BaseTask {
 
   static bool IsBinary(const Image &img);
 
-  void FirstPassTBB();
-  void MergeStripeBorders();
-  void SecondPassTBB();
+  void FirstPassTiles();
+  void MergeTileBorders();
+  void SecondPassTiles();
 
   std::vector<std::uint8_t> binary_;
   std::vector<int> labels_flat_;
   std::vector<int> parent_;
-  std::vector<int> stripe_offsets_;
-  std::vector<int> stripe_used_counts_;
+  std::vector<int> tile_offsets_;
+  std::vector<int> tile_used_counts_;
   std::vector<int> root_to_compact_;
   std::vector<int> root_generation_;
 
   int height_ = 0;
   int width_ = 0;
-  int stripe_count_ = 1;
+  int tile_rows_ = 0;
+  int tile_cols_ = 0;
+  int tile_count_ = 0;
   int max_label_id_ = 0;
   int generation_id_ = 1;
 };
