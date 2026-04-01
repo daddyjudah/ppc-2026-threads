@@ -208,20 +208,23 @@ bool MarinLMarkComponentsTBB::RunImpl() {
 }
 
 bool MarinLMarkComponentsTBB::PostProcessingImpl() {
-  labels_out_.resize(height_, std::vector<int>(width_, 0));
+  labels_out_.clear();
+  labels_out_.reserve(height_);
+
+  for (int i = 0; i < height_; ++i) {
+    labels_out_.emplace_back(width_);
+  }
 
   tbb::parallel_for(tbb::blocked_range<int>(0, height_), [&](const tbb::blocked_range<int> &r) {
     for (int y = r.begin(); y != r.end(); ++y) {
       const std::size_t row_offset = static_cast<std::size_t>(y) * width_;
-      for (int x = 0; x < width_; ++x) {
-        labels_out_[y][x] = labels_flat_[row_offset + x];
-      }
+
+      std::copy(labels_flat_.begin() + row_offset, labels_flat_.begin() + row_offset + width_, labels_out_[y].begin());
     }
   });
 
-  OutType out;
-  out.labels = labels_out_;
-  GetOutput() = out;
+  auto &out = GetOutput();
+  out.labels = std::move(labels_out_);
 
   return true;
 }
