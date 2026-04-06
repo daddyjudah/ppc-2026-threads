@@ -25,7 +25,6 @@ class MarinLMarkComponentsTBB : public BaseTask {
   static bool IsBinary(const Image &img);
 
   void FirstPassTBB();
-  void MergeStripeBorders();
   void SecondPassTBB();
   void ConvertLabelsToOutput();
 
@@ -33,15 +32,10 @@ class MarinLMarkComponentsTBB : public BaseTask {
   std::vector<int> labels_flat_;
   Labels labels_;
   std::vector<int> parent_;
-  std::vector<int> stripe_offsets_;
-  std::vector<int> stripe_used_counts_;
   std::vector<int> root_to_compact_;
-  std::vector<int> root_generation_;
   int height_ = 0;
   int width_ = 0;
-  int stripe_count_ = 1;
-  int max_label_id_ = 0;
-  int generation_id_ = 1;
+  int next_label_ = 1;
 };
 
 }  // namespace marin_l_mark_components
