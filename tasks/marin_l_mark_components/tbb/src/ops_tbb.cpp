@@ -39,6 +39,40 @@ void UnionLabels(std::vector<int> &parent, int a, int b) {
   }
 }
 
+void ProcessPixel(const std::vector<std::uint8_t> &binary, std::vector<int> &labels_flat, std::vector<int> &parent,
+                  int width, int row, int col, int &next_label) {
+  const std::size_t idx =
+      (static_cast<std::size_t>(row) * static_cast<std::size_t>(width)) + static_cast<std::size_t>(col);
+  if (binary[idx] == 0U) {
+    return;
+  }
+
+  const int left_label = (col > 0) ? labels_flat[idx - 1ULL] : 0;
+  const int top_label = (row > 0) ? labels_flat[idx - static_cast<std::size_t>(width)] : 0;
+
+  if (left_label == 0 && top_label == 0) {
+    parent[static_cast<std::size_t>(next_label)] = next_label;
+    labels_flat[idx] = next_label;
+    ++next_label;
+    return;
+  }
+
+  if (left_label != 0 && top_label == 0) {
+    labels_flat[idx] = left_label;
+    return;
+  }
+
+  if (left_label == 0 && top_label != 0) {
+    labels_flat[idx] = top_label;
+    return;
+  }
+
+  labels_flat[idx] = std::min(left_label, top_label);
+  if (left_label != top_label) {
+    UnionLabels(parent, left_label, top_label);
+  }
+}
+
 }  // namespace
 
 MarinLMarkComponentsTBB::MarinLMarkComponentsTBB(const InType &in) {
@@ -115,40 +149,8 @@ bool MarinLMarkComponentsTBB::RunImpl() {
 
 void MarinLMarkComponentsTBB::FirstPassTBB() {
   for (int row = 0; row < height_; ++row) {
-    const std::size_t row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
-
     for (int col = 0; col < width_; ++col) {
-      const std::size_t idx = row_offset + static_cast<std::size_t>(col);
-      if (binary_[idx] == 0U) {
-        continue;
-      }
-
-      const int left_label = (col > 0) ? labels_flat_[idx - 1ULL] : 0;
-      const int top_label = (row > 0) ? labels_flat_[idx - static_cast<std::size_t>(width_)] : 0;
-
-      if (left_label == 0 && top_label == 0) {
-        parent_[static_cast<std::size_t>(next_label_)] = next_label_;
-        labels_flat_[idx] = next_label_;
-        ++next_label_;
-        continue;
-      }
-
-      if (left_label != 0 && top_label == 0) {
-        labels_flat_[idx] = left_label;
-        continue;
-      }
-
-      if (left_label == 0 && top_label != 0) {
-        labels_flat_[idx] = top_label;
-        continue;
-      }
-
-      const int min_label = std::min(left_label, top_label);
-      labels_flat_[idx] = min_label;
-
-      if (left_label != top_label) {
-        UnionLabels(parent_, left_label, top_label);
-      }
+      ProcessPixel(binary_, labels_flat_, parent_, width_, row, col, next_label_);
     }
   }
 
