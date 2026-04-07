@@ -39,6 +39,28 @@ void UnionLabels(std::vector<int> &parent, int a, int b) {
   }
 }
 
+int MergeLabels(std::vector<int> &parent, int left_label, int top_label, int &next_label) {
+  if (left_label == 0 && top_label == 0) {
+    parent[static_cast<std::size_t>(next_label)] = next_label;
+    return next_label++;
+  }
+
+  if (left_label == 0) {
+    return top_label;
+  }
+
+  if (top_label == 0) {
+    return left_label;
+  }
+
+  const int merged_label = std::min(left_label, top_label);
+  if (left_label != top_label) {
+    UnionLabels(parent, left_label, top_label);
+  }
+
+  return merged_label;
+}
+
 void ProcessPixel(const std::vector<std::uint8_t> &binary, std::vector<int> &labels_flat, std::vector<int> &parent,
                   int width, int row, int col, int &next_label) {
   const std::size_t idx =
@@ -49,28 +71,7 @@ void ProcessPixel(const std::vector<std::uint8_t> &binary, std::vector<int> &lab
 
   const int left_label = (col > 0) ? labels_flat[idx - 1ULL] : 0;
   const int top_label = (row > 0) ? labels_flat[idx - static_cast<std::size_t>(width)] : 0;
-
-  if (left_label == 0 && top_label == 0) {
-    parent[static_cast<std::size_t>(next_label)] = next_label;
-    labels_flat[idx] = next_label;
-    ++next_label;
-    return;
-  }
-
-  if (left_label != 0 && top_label == 0) {
-    labels_flat[idx] = left_label;
-    return;
-  }
-
-  if (left_label == 0 && top_label != 0) {
-    labels_flat[idx] = top_label;
-    return;
-  }
-
-  labels_flat[idx] = std::min(left_label, top_label);
-  if (left_label != top_label) {
-    UnionLabels(parent, left_label, top_label);
-  }
+  labels_flat[idx] = MergeLabels(parent, left_label, top_label, next_label);
 }
 
 }  // namespace
