@@ -24,18 +24,11 @@ class MarinLMarkComponentsTBB : public BaseTask {
 
   static bool IsBinary(const Image &img);
 
-  void FirstPassTBB();
-  void SecondPassTBB();
-  void ConvertLabelsToOutput();
-
-  std::vector<std::uint8_t> binary_;
+  std::vector<std::uint8_t> binary_flat_;
   std::vector<int> labels_flat_;
-  Labels labels_;
-  std::vector<int> parent_;
-  std::vector<int> root_to_compact_;
+  Labels labels_out_;
   int height_ = 0;
   int width_ = 0;
-  int next_label_ = 1;
 };
 
 }  // namespace marin_l_mark_components
