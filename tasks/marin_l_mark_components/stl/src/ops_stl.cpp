@@ -340,10 +340,12 @@ bool MarinLMarkComponentsSTL::PostProcessingImpl() {
 }
 
 void MarinLMarkComponentsSTL::ConvertLabelsToOutput() {
-  labels_.assign(static_cast<std::size_t>(height_), std::vector<int>(static_cast<std::size_t>(width_), 0));
+  labels_.clear();
+  labels_.resize(static_cast<std::size_t>(height_));
 
   ParallelForBlocks(height_, stripe_count_, [&](int row_begin, int row_end) {
     for (int row = row_begin; row < row_end; ++row) {
+      labels_[static_cast<std::size_t>(row)].resize(static_cast<std::size_t>(width_));
       const std::size_t row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
       for (int col = 0; col < width_; ++col) {
         labels_[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)] =
