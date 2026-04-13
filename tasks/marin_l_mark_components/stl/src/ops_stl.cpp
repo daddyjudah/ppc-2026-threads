@@ -14,7 +14,7 @@ namespace marin_l_mark_components {
 namespace {
 
 constexpr std::uint64_t kMaxPixels = 100000000ULL;
-constexpr int kMinRowsPerStripe = 8;
+// Удалена неиспользуемая константа kMinRowsPerStripe
 
 struct StripeSetup {
   int num_stripes = 1;
