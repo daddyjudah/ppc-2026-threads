@@ -28,8 +28,6 @@ class MarinLMarkComponentsSTL : public BaseTask {
   std::vector<int> labels_flat_;
   Labels labels_out_;
 
-  std::vector<int> row_weights_;
-
   int height_ = 0;
   int width_ = 0;
 };
