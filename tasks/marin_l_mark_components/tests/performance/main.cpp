@@ -7,6 +7,7 @@
 #include "marin_l_mark_components/common/include/common.hpp"
 #include "marin_l_mark_components/omp/include/ops_omp.hpp"
 #include "marin_l_mark_components/seq/include/ops_seq.hpp"
+#include "marin_l_mark_components/stl/include/ops_stl.hpp"
 #include "marin_l_mark_components/tbb/include/ops_tbb.hpp"
 #include "util/include/perf_test_util.hpp"
 
@@ -80,8 +81,8 @@ TEST_P(MarinLRunPerfTestComponents, RunPerfModes) {
 namespace {
 
 const auto kAllPerfTasks =
-    ppc::util::MakeAllPerfTasks<InType, MarinLMarkComponentsSEQ, MarinLMarkComponentsOMP, MarinLMarkComponentsTBB>(
-        PPC_SETTINGS_marin_l_mark_components);
+    ppc::util::MakeAllPerfTasks<InType, MarinLMarkComponentsSEQ, MarinLMarkComponentsOMP, MarinLMarkComponentsSTL,
+                                MarinLMarkComponentsTBB>(PPC_SETTINGS_marin_l_mark_components);
 
 const auto kGtestValues = ppc::util::TupleToGTestValues(kAllPerfTasks);
 
