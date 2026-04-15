@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "marin_l_mark_components/common/include/common.hpp"
@@ -14,13 +15,28 @@ namespace {
 
 constexpr std::uint64_t kMaxPixels = 100000000ULL;
 
+unsigned int GetThreadCount() {
+  unsigned int num_threads = std::thread::hardware_concurrency();
+  if (num_threads == 0) {
+    num_threads = 4;
+  }
+  return num_threads;
+}
+
+std::vector<int> BuildStripeBounds(int height, int num_stripes) {
+  std::vector<int> stripe_bounds(static_cast<std::size_t>(num_stripes) + 1ULL, 0);
+  for (int stripe = 0; stripe <= num_stripes; ++stripe) {
+    stripe_bounds[static_cast<std::size_t>(stripe)] = (stripe * height) / num_stripes;
+  }
+  return stripe_bounds;
+}
+
 int FindRoot(std::vector<int> &parent, int x) {
   int root = x;
   while (parent[static_cast<std::size_t>(root)] != root) {
     root = parent[static_cast<std::size_t>(root)];
   }
 
-  // Сжатие путей (Path Compression)
   int current = x;
   while (current != root) {
     const int next = parent[static_cast<std::size_t>(current)];
@@ -43,6 +59,101 @@ void UnionLabels(std::vector<int> &parent, int a, int b) {
   }
 }
 
+int ResolvePixelLabel(int left_label, int top_label, std::vector<int> &parent) {
+  if (left_label == 0 && top_label == 0) {
+    return 0;
+  }
+  if (left_label == 0) {
+    return top_label;
+  }
+  if (top_label == 0) {
+    return left_label;
+  }
+
+  const int min_label = std::min(left_label, top_label);
+  if (left_label != top_label) {
+    UnionLabels(parent, left_label, top_label);
+  }
+  return min_label;
+}
+
+void ProcessStripeFirstPass(const std::vector<std::uint8_t> &binary_flat, std::vector<int> &labels_flat, int width,
+                            int start_row, int end_row, int base_label, std::vector<int> &parent, int &max_used) {
+  int next_label = base_label;
+  for (int row = start_row; row < end_row; ++row) {
+    const auto row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width);
+    const auto prev_row_offset = static_cast<std::size_t>(row - 1) * static_cast<std::size_t>(width);
+
+    for (int col = 0; col < width; ++col) {
+      const auto idx = row_offset + static_cast<std::size_t>(col);
+      if (binary_flat[idx] == 0U) {
+        continue;
+      }
+
+      const int left_label = (col > 0) ? labels_flat[idx - 1ULL] : 0;
+      const int top_label = (row > start_row) ? labels_flat[prev_row_offset + static_cast<std::size_t>(col)] : 0;
+      const int label = ResolvePixelLabel(left_label, top_label, parent);
+      if (label == 0) {
+        labels_flat[idx] = next_label++;
+      } else {
+        labels_flat[idx] = label;
+      }
+    }
+  }
+  max_used = next_label;
+}
+
+void MergeStripeBoundaries(const std::vector<std::uint8_t> &binary_flat, const std::vector<int> &labels_flat, int width,
+                           const std::vector<int> &stripe_bounds, std::vector<int> &parent) {
+  const int num_stripes = static_cast<int>(stripe_bounds.size()) - 1;
+  for (int stripe = 0; stripe < num_stripes - 1; ++stripe) {
+    const int boundary_row = stripe_bounds[static_cast<std::size_t>(stripe) + 1ULL];
+    const auto row_offset = static_cast<std::size_t>(boundary_row) * static_cast<std::size_t>(width);
+    const auto prev_row_offset = static_cast<std::size_t>(boundary_row - 1) * static_cast<std::size_t>(width);
+
+    for (int col = 0; col < width; ++col) {
+      const auto bottom_idx = row_offset + static_cast<std::size_t>(col);
+      const auto top_idx = prev_row_offset + static_cast<std::size_t>(col);
+      if (binary_flat[bottom_idx] == 1U && binary_flat[top_idx] == 1U) {
+        UnionLabels(parent, labels_flat[bottom_idx], labels_flat[top_idx]);
+      }
+    }
+  }
+}
+
+std::vector<int> BuildCompactedLabels(const std::vector<int> &stripe_base_label,
+                                      const std::vector<int> &stripe_max_used, std::vector<int> &parent,
+                                      int total_max_labels) {
+  std::vector<int> compacted(static_cast<std::size_t>(total_max_labels), 0);
+  int next_compact_id = 1;
+
+  for (std::size_t stripe = 0; stripe < stripe_base_label.size(); ++stripe) {
+    for (int label = stripe_base_label[stripe]; label < stripe_max_used[stripe]; ++label) {
+      const int root = FindRoot(parent, label);
+      if (compacted[static_cast<std::size_t>(root)] == 0) {
+        compacted[static_cast<std::size_t>(root)] = next_compact_id++;
+      }
+      compacted[static_cast<std::size_t>(label)] = compacted[static_cast<std::size_t>(root)];
+    }
+  }
+
+  return compacted;
+}
+
+void ApplyCompactedLabels(std::vector<int> &labels_flat, int width, int start_row, int end_row,
+                          const std::vector<int> &compacted) {
+  for (int row = start_row; row < end_row; ++row) {
+    const auto row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width);
+    for (int col = 0; col < width; ++col) {
+      const auto idx = row_offset + static_cast<std::size_t>(col);
+      const int label = labels_flat[idx];
+      if (label != 0) {
+        labels_flat[idx] = compacted[static_cast<std::size_t>(label)];
+      }
+    }
+  }
+}
+
 }  // namespace
 
 MarinLMarkComponentsSTL::MarinLMarkComponentsSTL(const InType &in) {
@@ -61,7 +172,6 @@ bool MarinLMarkComponentsSTL::IsBinary(const Image &img) {
   return true;
 }
 
-// Строго выровненная валидация
 bool MarinLMarkComponentsSTL::ValidationImpl() {
   const auto &img = GetInput().binary;
   if (img.empty() || img.front().empty()) {
@@ -95,17 +205,11 @@ bool MarinLMarkComponentsSTL::PreProcessingImpl() {
   binary_flat_.assign(static_cast<std::size_t>(total_pixels), 0);
   labels_flat_.assign(static_cast<std::size_t>(total_pixels), 0);
 
-  // Определяем количество потоков
-  unsigned int num_threads = std::thread::hardware_concurrency();
-  if (num_threads == 0) {
-    num_threads = 4;
-  }
-  int num_stripes = std::min(height_, static_cast<int>(num_threads));
+  const int num_stripes = std::min(height_, static_cast<int>(GetThreadCount()));
 
   std::vector<std::thread> threads;
   threads.reserve(static_cast<std::size_t>(num_stripes));
 
-  // Параллельное уплощение (flattening)
   for (int stripe = 0; stripe < num_stripes; ++stripe) {
     threads.emplace_back([this, &img, stripe, num_stripes]() {
       const int start_row = (stripe * height_) / num_stripes;
@@ -133,27 +237,20 @@ bool MarinLMarkComponentsSTL::RunImpl() {
     return true;
   }
 
-  unsigned int num_threads = std::thread::hardware_concurrency();
-  if (num_threads == 0) {
-    num_threads = 4;
-  }
-  int num_stripes = std::min(height_, static_cast<int>(num_threads));
+  const int num_stripes = std::min(height_, static_cast<int>(GetThreadCount()));
 
-  std::vector<int> stripe_bounds(static_cast<std::size_t>(num_stripes) + 1ULL, 0);
+  const std::vector<int> stripe_bounds = BuildStripeBounds(height_, num_stripes);
   std::vector<int> stripe_base_label(static_cast<std::size_t>(num_stripes), 0);
   std::vector<int> stripe_max_used(static_cast<std::size_t>(num_stripes), 0);
 
   int total_max_labels = 1;
 
   for (int stripe = 0; stripe < num_stripes; ++stripe) {
-    stripe_bounds[static_cast<std::size_t>(stripe)] = (stripe * height_) / num_stripes;
     stripe_base_label[static_cast<std::size_t>(stripe)] = total_max_labels;
 
-    // Выделяем каждому страйпу независимое пространство ID, чтобы избежать гонок (Race Conditions)
-    const int stripe_height = ((stripe + 1) * height_) / num_stripes - (stripe * height_) / num_stripes;
+    const int stripe_height = (((stripe + 1) * height_) / num_stripes) - ((stripe * height_) / num_stripes);
     total_max_labels += ((stripe_height * width_) / 2) + 1;
   }
-  stripe_bounds[static_cast<std::size_t>(num_stripes)] = height_;
 
   std::vector<int> parent(static_cast<std::size_t>(total_max_labels));
   for (int i = 0; i < total_max_labels; ++i) {
@@ -163,42 +260,13 @@ bool MarinLMarkComponentsSTL::RunImpl() {
   std::vector<std::thread> workers;
   workers.reserve(static_cast<std::size_t>(num_stripes));
 
-  // === ПЕРВЫЙ ПРОХОД: Локальная маркировка ===
   for (int stripe = 0; stripe < num_stripes; ++stripe) {
     workers.emplace_back([this, &parent, &stripe_bounds, &stripe_base_label, &stripe_max_used, stripe]() {
       const int start_row = stripe_bounds[static_cast<std::size_t>(stripe)];
       const int end_row = stripe_bounds[static_cast<std::size_t>(stripe) + 1ULL];
-      int next_label = stripe_base_label[static_cast<std::size_t>(stripe)];
-
-      for (int row = start_row; row < end_row; ++row) {
-        const auto row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
-        const auto prev_row_offset = static_cast<std::size_t>(row - 1) * static_cast<std::size_t>(width_);
-
-        for (int col = 0; col < width_; ++col) {
-          const auto idx = row_offset + static_cast<std::size_t>(col);
-          if (binary_flat_[idx] == 0U) {
-            continue;
-          }
-
-          const int left_label = (col > 0) ? labels_flat_[idx - 1ULL] : 0;
-          const int top_label = (row > start_row) ? labels_flat_[prev_row_offset + static_cast<std::size_t>(col)] : 0;
-
-          if (left_label == 0 && top_label == 0) {
-            labels_flat_[idx] = next_label++;
-          } else if (left_label != 0 && top_label == 0) {
-            labels_flat_[idx] = left_label;
-          } else if (left_label == 0 && top_label != 0) {
-            labels_flat_[idx] = top_label;
-          } else {
-            const int min_label = std::min(left_label, top_label);
-            labels_flat_[idx] = min_label;
-            if (left_label != top_label) {
-              UnionLabels(parent, left_label, top_label);
-            }
-          }
-        }
-      }
-      stripe_max_used[static_cast<std::size_t>(stripe)] = next_label;
+      ProcessStripeFirstPass(binary_flat_, labels_flat_, width_, start_row, end_row,
+                             stripe_base_label[static_cast<std::size_t>(stripe)], parent,
+                             stripe_max_used[static_cast<std::size_t>(stripe)]);
     });
   }
 
@@ -207,53 +275,15 @@ bool MarinLMarkComponentsSTL::RunImpl() {
   }
   workers.clear();
 
-  // === МЕРДЖ ГРАНИЦ ===
-  for (int stripe = 0; stripe < num_stripes - 1; ++stripe) {
-    const int boundary_row = stripe_bounds[static_cast<std::size_t>(stripe) + 1ULL];
-    const auto row_offset = static_cast<std::size_t>(boundary_row) * static_cast<std::size_t>(width_);
-    const auto prev_row_offset = static_cast<std::size_t>(boundary_row - 1) * static_cast<std::size_t>(width_);
+  MergeStripeBoundaries(binary_flat_, labels_flat_, width_, stripe_bounds, parent);
 
-    for (int col = 0; col < width_; ++col) {
-      const auto bottom_idx = row_offset + static_cast<std::size_t>(col);
-      const auto top_idx = prev_row_offset + static_cast<std::size_t>(col);
+  const std::vector<int> compacted = BuildCompactedLabels(stripe_base_label, stripe_max_used, parent, total_max_labels);
 
-      if (binary_flat_[bottom_idx] == 1U && binary_flat_[top_idx] == 1U) {
-        UnionLabels(parent, labels_flat_[bottom_idx], labels_flat_[top_idx]);
-      }
-    }
-  }
-
-  // === КОМПАКТИЗАЦИЯ ===
-  std::vector<int> compacted(static_cast<std::size_t>(total_max_labels), 0);
-  int next_compact_id = 1;
-
-  for (int stripe = 0; stripe < num_stripes; ++stripe) {
-    for (int label = stripe_base_label[static_cast<std::size_t>(stripe)];
-         label < stripe_max_used[static_cast<std::size_t>(stripe)]; ++label) {
-      const int root = FindRoot(parent, label);
-      if (compacted[static_cast<std::size_t>(root)] == 0) {
-        compacted[static_cast<std::size_t>(root)] = next_compact_id++;
-      }
-      compacted[static_cast<std::size_t>(label)] = compacted[static_cast<std::size_t>(root)];
-    }
-  }
-
-  // === ВТОРОЙ ПРОХОД: Применение финальных лейблов ===
   for (int stripe = 0; stripe < num_stripes; ++stripe) {
     workers.emplace_back([this, &stripe_bounds, &compacted, stripe]() {
       const int start_row = stripe_bounds[static_cast<std::size_t>(stripe)];
       const int end_row = stripe_bounds[static_cast<std::size_t>(stripe) + 1ULL];
-
-      for (int row = start_row; row < end_row; ++row) {
-        const auto row_offset = static_cast<std::size_t>(row) * static_cast<std::size_t>(width_);
-        for (int col = 0; col < width_; ++col) {
-          const auto idx = row_offset + static_cast<std::size_t>(col);
-          const int label = labels_flat_[idx];
-          if (label != 0) {
-            labels_flat_[idx] = compacted[static_cast<std::size_t>(label)];
-          }
-        }
-      }
+      ApplyCompactedLabels(labels_flat_, width_, start_row, end_row, compacted);
     });
   }
 
@@ -264,7 +294,6 @@ bool MarinLMarkComponentsSTL::RunImpl() {
   return true;
 }
 
-// Строго выровненный пост-процессинг, обходящий баг resize в GCC 14 (array-bounds memmove)
 bool MarinLMarkComponentsSTL::PostProcessingImpl() {
   labels_out_.clear();
   labels_out_.reserve(static_cast<std::size_t>(height_));
@@ -273,11 +302,7 @@ bool MarinLMarkComponentsSTL::PostProcessingImpl() {
     labels_out_.emplace_back(static_cast<std::size_t>(width_));
   }
 
-  unsigned int num_threads = std::thread::hardware_concurrency();
-  if (num_threads == 0) {
-    num_threads = 4;
-  }
-  int num_stripes = std::min(height_, static_cast<int>(num_threads));
+  const int num_stripes = std::min(height_, static_cast<int>(GetThreadCount()));
 
   std::vector<std::thread> threads;
   threads.reserve(static_cast<std::size_t>(num_stripes));
