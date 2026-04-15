@@ -13,7 +13,6 @@ class MarinLMarkComponentsSTL : public BaseTask {
   static constexpr ppc::task::TypeOfTask GetStaticTypeOfTask() {
     return ppc::task::TypeOfTask::kSTL;
   }
-
   explicit MarinLMarkComponentsSTL(const InType &in);
 
  private:
@@ -24,12 +23,23 @@ class MarinLMarkComponentsSTL : public BaseTask {
 
   static bool IsBinary(const Image &img);
 
-  std::vector<std::uint8_t> binary_flat_;
-  std::vector<int> labels_flat_;
-  Labels labels_out_;
+  void FirstPassSTL();
+  void MergeStripeBorders();
+  void SecondPassSTL();
+  void ConvertLabelsToOutput();
 
+  std::vector<std::uint8_t> binary_;
+  std::vector<int> labels_flat_;
+  Labels labels_;
+  std::vector<int> parent_;
+  std::vector<int> stripe_bounds_;
+  std::vector<int> stripe_base_label_;
+  std::vector<int> stripe_used_label_end_;
+  std::vector<int> root_to_compact_;
   int height_ = 0;
   int width_ = 0;
+  int stripe_count_ = 1;
+  int total_max_labels_ = 1;
 };
 
 }  // namespace marin_l_mark_components
