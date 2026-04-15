@@ -7,7 +7,6 @@
 #include <functional>
 #include <mutex>
 #include <thread>
-#include <utility>
 #include <vector>
 
 #include "marin_l_mark_components/common/include/common.hpp"
