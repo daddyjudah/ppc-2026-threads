@@ -72,10 +72,8 @@ int MergeLabels(std::vector<int> &parent, int left_label, int top_label, int &ne
   return merged_label;
 }
 
-template <class Function>
-void RunParallelWorkers(int worker_count, Function &&fn) {
+void RunParallelWorkers(int worker_count, const std::function<void(int, int)> &fn) {
   const int total_workers = std::max(1, worker_count);
-  auto forwarded_fn = std::forward<Function>(fn);
   std::vector<std::thread> threads;
   threads.reserve(static_cast<std::size_t>(std::max(0, total_workers - 1)));
 
@@ -85,7 +83,7 @@ void RunParallelWorkers(int worker_count, Function &&fn) {
   for (int worker = 1; worker < total_workers; ++worker) {
     threads.emplace_back([&, worker]() {
       try {
-        std::invoke(forwarded_fn, worker, total_workers);
+        fn(worker, total_workers);
       } catch (...) {
         std::scoped_lock lock(error_mutex);
         if (thread_error == nullptr) {
@@ -96,7 +94,7 @@ void RunParallelWorkers(int worker_count, Function &&fn) {
   }
 
   try {
-    std::invoke(forwarded_fn, 0, total_workers);
+    fn(0, total_workers);
   } catch (...) {
     std::scoped_lock lock(error_mutex);
     if (thread_error == nullptr) {
@@ -115,19 +113,17 @@ void RunParallelWorkers(int worker_count, Function &&fn) {
   }
 }
 
-template <class Function>
-void ParallelForBlocks(int total_items, int worker_count, Function &&fn) {
+void ParallelForBlocks(int total_items, int worker_count, const std::function<void(int, int)> &fn) {
   if (total_items <= 0) {
     return;
   }
 
   const int actual_workers = std::min(std::max(1, worker_count), total_items);
-  RunParallelWorkers(actual_workers,
-                     [forwarded_fn = std::forward<Function>(fn), total_items](int worker, int total_workers) {
+  RunParallelWorkers(actual_workers, [fn, total_items](int worker, int total_workers) {
     const int begin = (worker * total_items) / total_workers;
     const int end = ((worker + 1) * total_items) / total_workers;
     if (begin < end) {
-      std::invoke(forwarded_fn, begin, end);
+      fn(begin, end);
     }
   });
 }
