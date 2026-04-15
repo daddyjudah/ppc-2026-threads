@@ -77,6 +77,20 @@ int ResolvePixelLabel(int left_label, int top_label, std::vector<int> &parent) {
   return min_label;
 }
 
+int GetLeftLabel(const std::vector<int> &labels_flat, std::size_t idx, int col) {
+  if (col <= 0) {
+    return 0;
+  }
+  return labels_flat[idx - 1ULL];
+}
+
+int GetTopLabel(const std::vector<int> &labels_flat, std::size_t prev_row_offset, int row, int start_row, int col) {
+  if (row <= start_row) {
+    return 0;
+  }
+  return labels_flat[prev_row_offset + static_cast<std::size_t>(col)];
+}
+
 void ProcessStripeFirstPass(const std::vector<std::uint8_t> &binary_flat, std::vector<int> &labels_flat, int width,
                             int start_row, int end_row, int base_label, std::vector<int> &parent, int &max_used) {
   int next_label = base_label;
@@ -90,14 +104,14 @@ void ProcessStripeFirstPass(const std::vector<std::uint8_t> &binary_flat, std::v
         continue;
       }
 
-      const int left_label = (col > 0) ? labels_flat[idx - 1ULL] : 0;
-      const int top_label = (row > start_row) ? labels_flat[prev_row_offset + static_cast<std::size_t>(col)] : 0;
+      const int left_label = GetLeftLabel(labels_flat, idx, col);
+      const int top_label = GetTopLabel(labels_flat, prev_row_offset, row, start_row, col);
       const int label = ResolvePixelLabel(left_label, top_label, parent);
       if (label == 0) {
         labels_flat[idx] = next_label++;
-      } else {
-        labels_flat[idx] = label;
+        continue;
       }
+      labels_flat[idx] = label;
     }
   }
   max_used = next_label;
