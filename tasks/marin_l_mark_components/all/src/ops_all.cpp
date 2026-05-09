@@ -17,7 +17,7 @@ namespace marin_l_mark_components {
 
 namespace {
 
-constexpr std::uint64_t kMaxPixels = 100000000ULL;
+constexpr std::uint64_t kMaxPixels = 100000000ULL;  //
 constexpr int kMinRowsPerStripe = 64;
 
 struct StripeSetup {
