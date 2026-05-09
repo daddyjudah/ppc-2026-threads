@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <numeric>
 #include <vector>
 
 #include "marin_l_mark_components/common/include/common.hpp"
@@ -258,6 +257,44 @@ void ApplyRankOffset(std::vector<int> &labels_flat, int label_offset) {
   });
 }
 
+std::size_t FindNextNonEmptyRank(const std::vector<int> &row_counts, std::size_t rank) {
+  std::size_t next_rank = rank + 1;
+  while (next_rank < row_counts.size() && row_counts[next_rank] == 0) {
+    ++next_rank;
+  }
+  return next_rank;
+}
+
+bool HasAdjacentBoundary(const std::vector<int> &row_counts, const std::vector<int> &row_displs, std::size_t rank,
+                         std::size_t next_rank) {
+  if (next_rank >= row_counts.size()) {
+    return false;
+  }
+
+  const int boundary_row = row_displs[rank] + row_counts[rank];
+  return row_displs[next_rank] == boundary_row;
+}
+
+void MergeBoundaryRow(const std::vector<std::uint8_t> &global_binary_flat, std::vector<int> &global_labels_flat,
+                      std::vector<int> &parent, int boundary_row, int width) {
+  const std::size_t top_row_offset = static_cast<std::size_t>(boundary_row - 1) * static_cast<std::size_t>(width);
+  const std::size_t bottom_row_offset = static_cast<std::size_t>(boundary_row) * static_cast<std::size_t>(width);
+
+  for (int col = 0; col < width; ++col) {
+    const std::size_t top_idx = top_row_offset + static_cast<std::size_t>(col);
+    const std::size_t bottom_idx = bottom_row_offset + static_cast<std::size_t>(col);
+    if (global_binary_flat[top_idx] != 1U || global_binary_flat[bottom_idx] != 1U) {
+      continue;
+    }
+
+    const int top_label = global_labels_flat[top_idx];
+    const int bottom_label = global_labels_flat[bottom_idx];
+    if (top_label > 0 && bottom_label > 0 && top_label != bottom_label) {
+      UnionLabels(parent, top_label, bottom_label);
+    }
+  }
+}
+
 void MergeRankBorders(const std::vector<std::uint8_t> &global_binary_flat, std::vector<int> &global_labels_flat,
                       std::vector<int> &parent, const std::vector<int> &row_counts, const std::vector<int> &row_displs,
                       int width) {
@@ -266,33 +303,19 @@ void MergeRankBorders(const std::vector<std::uint8_t> &global_binary_flat, std::
       continue;
     }
 
-    std::size_t next_rank = rank + 1;
-    while (next_rank < row_counts.size() && row_counts[next_rank] == 0) {
-      ++next_rank;
-    }
-    if (next_rank >= row_counts.size()) {
-      break;
-    }
-
-    const int boundary_row = row_displs[rank] + row_counts[rank];
-    if (row_displs[next_rank] != boundary_row) {
+    const std::size_t next_rank = FindNextNonEmptyRank(row_counts, rank);
+    if (!HasAdjacentBoundary(row_counts, row_displs, rank, next_rank)) {
+      if (next_rank >= row_counts.size()) {
+        break;
+      }
       continue;
     }
 
-    const std::size_t top_row_offset = static_cast<std::size_t>(boundary_row - 1) * static_cast<std::size_t>(width);
-    const std::size_t bottom_row_offset = static_cast<std::size_t>(boundary_row) * static_cast<std::size_t>(width);
-
-    for (int col = 0; col < width; ++col) {
-      const std::size_t top_idx = top_row_offset + static_cast<std::size_t>(col);
-      const std::size_t bottom_idx = bottom_row_offset + static_cast<std::size_t>(col);
-      if (global_binary_flat[top_idx] == 1U && global_binary_flat[bottom_idx] == 1U) {
-        const int top_label = global_labels_flat[top_idx];
-        const int bottom_label = global_labels_flat[bottom_idx];
-        if (top_label > 0 && bottom_label > 0 && top_label != bottom_label) {
-          UnionLabels(parent, top_label, bottom_label);
-        }
-      }
+    const int boundary_row = row_displs[rank] + row_counts[rank];
+    if (boundary_row <= 0) {
+      break;
     }
+    MergeBoundaryRow(global_binary_flat, global_labels_flat, parent, boundary_row, width);
   }
 }
 
@@ -435,7 +458,7 @@ bool MarinLMarkComponentsALL::RunImpl() {
 
   if (rank_ == 0) {
     std::vector<int> global_parent(static_cast<std::size_t>(total_component_count) + 1ULL, 0);
-    std::iota(global_parent.begin(), global_parent.end(), 0);
+    std::ranges::generate(global_parent, [value = 0]() mutable { return value++; });
     MergeRankBorders(global_binary_flat, global_labels_flat_, global_parent, row_counts, row_displs, width_);
     CompactGlobalLabels(global_labels_flat_, global_parent, total_component_count);
   }
