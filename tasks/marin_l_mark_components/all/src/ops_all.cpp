@@ -489,7 +489,7 @@ void MarinLMarkComponentsALL::ConvertLabelsToOutput() {
             global_labels_flat_[row_offset + static_cast<std::size_t>(col)];
       }
     }
-  });
+  });  //
 }
 
 }  // namespace marin_l_mark_components
